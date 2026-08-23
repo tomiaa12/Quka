@@ -79,7 +79,8 @@
     },
     "macOS": {
       "minimumSystemVersion": "10.15",
-      "hardenedRuntime": true,
+      "hardenedRuntime": false,
+      "signingIdentity": "-",
       "entitlements": "Entitlements.plist",
       "dmg": {
         "appPosition": { "x": 180, "y": 170 },
