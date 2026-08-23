@@ -114,7 +114,6 @@ pub fn show_settings_window(app: &AppHandle) -> Result<(), AppError> {
         .inner_size(760.0, 520.0)
         .resizable(false)
         .decorations(true)
-        .transparent(false)
         .skip_taskbar(false)
         .center()
         .build()
