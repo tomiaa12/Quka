@@ -41,8 +41,8 @@ const footerHint = computed(() => {
   if (!search.isEmptyKeyword && search.searchElapsedMs > 0) {
     return `${search.searchElapsedMs} ms · 搜索 < 20ms`;
   }
-  if (search.isEmptyKeyword && search.results.length > 0) return "最近使用 · 窗口 < 100ms";
-  return "搜索 < 20ms · 窗口 < 100ms";
+  if (search.isEmptyKeyword && search.results.length > 0) return "最近使用";
+  return "搜索 < 20ms";
 });
 
 function windowHeight(): number {
@@ -126,6 +126,13 @@ function hideIfUnfocused(): void {
   void hideSearchWindow();
 }
 
+function hideIfWindowLostFocus(): void {
+  window.setTimeout(() => {
+    if (document.hasFocus()) return;
+    hideIfUnfocused();
+  }, 0);
+}
+
 onMounted(() => {
   void (async () => {
     await settings.load();
@@ -137,8 +144,6 @@ onMounted(() => {
         search.error = status.error || "快捷键注册失败";
       } else if (status.error) {
         search.error = status.error;
-      } else {
-        search.notice = search.notice || `按 ${status.label} 呼出窗口`;
       }
     } catch (error) {
       search.error = error instanceof Error ? error.message : String(error);
@@ -169,14 +174,17 @@ onMounted(() => {
   })();
   media.addEventListener("change", onSchemeChange);
   window.addEventListener("focus", focusInput);
+  window.addEventListener("blur", hideIfWindowLostFocus);
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "visible") focusInput();
+    else hideIfWindowLostFocus();
   });
 });
 
 onUnmounted(() => {
   media.removeEventListener("change", onSchemeChange);
   window.removeEventListener("focus", focusInput);
+  window.removeEventListener("blur", hideIfWindowLostFocus);
   void unlistenShown?.();
   void unlistenFocus?.();
   void unlistenRescan?.();

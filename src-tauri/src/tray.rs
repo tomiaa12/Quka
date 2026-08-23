@@ -1,3 +1,4 @@
+use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager};
@@ -37,7 +38,7 @@ pub fn install(app: &AppHandle) -> Result<(), String> {
     let menu = Menu::with_items(app, &[&title, &open, &settings, &rescan, &separator, &quit])
         .map_err(|error| error.to_string())?;
 
-    let mut builder = TrayIconBuilder::new()
+    let builder = TrayIconBuilder::new()
         .menu(&menu)
         .tooltip("Quka")
         .show_menu_on_left_click(cfg!(target_os = "macos"))
@@ -72,13 +73,16 @@ pub fn install(app: &AppHandle) -> Result<(), String> {
             }
         });
 
-    if let Some(icon) = app.default_window_icon() {
-        builder = builder.icon(icon.clone());
-    }
-
-    builder.build(app).map_err(|error| error.to_string())?;
+    builder
+        .icon(tray_icon()?)
+        .build(app)
+        .map_err(|error| error.to_string())?;
     log::info!("系统托盘已就绪");
     Ok(())
+}
+
+fn tray_icon() -> Result<Image<'static>, String> {
+    Image::from_bytes(include_bytes!("../icons/32x32.png")).map_err(|error| error.to_string())
 }
 
 fn start_rescan(app: &AppHandle) {

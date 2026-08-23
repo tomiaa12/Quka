@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Mutex;
 
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition};
@@ -5,6 +6,22 @@ use tauri::{AppHandle, Emitter, Manager, PhysicalPosition};
 use crate::state::AppError;
 
 static LAST_MONITOR: Mutex<Option<CachedMonitor>> = Mutex::new(None);
+static IGNORE_UNFOCUS_UNTIL: AtomicI64 = AtomicI64::new(0);
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+fn arm_ignore_unfocus() {
+    IGNORE_UNFOCUS_UNTIL.store(now_ms() + 400, Ordering::Relaxed);
+}
+
+pub fn should_hide_on_unfocus() -> bool {
+    now_ms() >= IGNORE_UNFOCUS_UNTIL.load(Ordering::Relaxed)
+}
 
 #[derive(Clone, Copy)]
 struct CachedMonitor {
@@ -46,6 +63,7 @@ pub fn hide_search_window(app: &AppHandle) -> Result<(), AppError> {
 
 pub fn show_search_window(app: &AppHandle) -> Result<(), AppError> {
     let started = std::time::Instant::now();
+    arm_ignore_unfocus();
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| AppError::Shortcut("搜索窗口不存在".into()))?;

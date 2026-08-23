@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref } from "vue";
+import { onMounted, ref } from "vue";
 
 const props = defineProps<{
   modelValue: string;
@@ -22,7 +22,9 @@ function onInput(event: Event): void {
 }
 
 function onBlur(): void {
-  void nextTick(() => focus());
+  window.setTimeout(() => {
+    if (document.hasFocus()) focus();
+  }, 50);
 }
 
 onMounted(() => {
