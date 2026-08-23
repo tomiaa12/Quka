@@ -2,6 +2,7 @@
 import { onMounted, onUnmounted, ref } from "vue";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getDatabaseInfo, rescanApplications, type ScanResult } from "../services/app";
+import { checkForUpdate, currentVersion, installUpdate, type AppUpdate } from "../services/update";
 import { isTauri } from "../services/window";
 import { themeLabel } from "../services/theme";
 import { useSettingsStore } from "../stores/settings";
@@ -14,6 +15,10 @@ const appCount = ref(0);
 const scanning = ref(false);
 const message = ref("");
 const error = ref("");
+const version = ref("");
+const updateInfo = ref<AppUpdate | null>(null);
+const checkingUpdate = ref(false);
+const installingUpdate = ref(false);
 
 let unlistenRescan: UnlistenFn | undefined;
 
@@ -60,6 +65,48 @@ async function applyScan(result: ScanResult): Promise<void> {
   message.value = `已扫描 ${result.applicationCount} 个应用，新增 ${result.inserted}，更新 ${result.updated}`;
 }
 
+function updateStatus(): string {
+  if (installingUpdate.value) return "正在下载并安装更新…";
+  if (checkingUpdate.value) return "正在检查更新…";
+  if (updateInfo.value) return `发现新版本 ${updateInfo.value.version}`;
+  if (version.value) return `当前 ${version.value}`;
+  return "检查 GitHub Release";
+}
+
+async function checkUpdate(silent = false): Promise<void> {
+  checkingUpdate.value = true;
+  try {
+    const next = await checkForUpdate();
+    updateInfo.value = next;
+    if (!silent) {
+      error.value = "";
+      message.value = next ? `发现新版本 ${next.version}` : "已是最新版本";
+    }
+  } catch (item) {
+    updateInfo.value = null;
+    if (!silent) {
+      const text = item instanceof Error ? item.message : String(item);
+      error.value = text.includes("Could not fetch") || text.includes("error sending request")
+        ? "检查更新失败，请确认已发布 Release"
+        : text;
+    }
+  } finally {
+    checkingUpdate.value = false;
+  }
+}
+
+async function applyUpdate(): Promise<void> {
+  if (!updateInfo.value) return;
+  installingUpdate.value = true;
+  error.value = "";
+  try {
+    await installUpdate(updateInfo.value);
+  } catch (item) {
+    error.value = item instanceof Error ? item.message : String(item);
+    installingUpdate.value = false;
+  }
+}
+
 async function rescan(): Promise<void> {
   scanning.value = true;
   error.value = "";
@@ -75,7 +122,11 @@ async function rescan(): Promise<void> {
 onMounted(() => {
   void settings.load();
   void refreshCount();
+  void currentVersion().then((value) => {
+    version.value = value;
+  });
   if (!isTauri()) return;
+  void checkUpdate(true);
   void listen<ScanResult>("apps-rescanned", (event) => {
     void applyScan(event.payload);
   }).then((unlisten) => {
@@ -136,6 +187,30 @@ onUnmounted(() => {
             </div>
             <button type="button" class="shortcut-box" @click="settings.cycleTheme()">
               {{ themeLabel(settings.theme) }}
+            </button>
+          </div>
+          <div class="row">
+            <div>
+              <div class="row-title">软件更新</div>
+              <div class="row-desc">{{ updateStatus() }}</div>
+            </div>
+            <button
+              v-if="updateInfo"
+              type="button"
+              class="btn"
+              :disabled="installingUpdate"
+              @click="applyUpdate"
+            >
+              {{ installingUpdate ? "更新中…" : "立即更新" }}
+            </button>
+            <button
+              v-else
+              type="button"
+              class="btn"
+              :disabled="checkingUpdate"
+              @click="checkUpdate(false)"
+            >
+              {{ checkingUpdate ? "检查中…" : "检查更新" }}
             </button>
           </div>
         </template>

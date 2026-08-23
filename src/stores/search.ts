@@ -6,7 +6,8 @@ import {
   type ScannerName,
 } from "../services/app";
 import { searchApplications } from "../services/search";
-import { hideSearchWindow } from "../services/window";
+import { checkForUpdate } from "../services/update";
+import { hideSearchWindow, isTauri } from "../services/window";
 import type { Application } from "../types/application";
 
 const SEARCH_DELAY_MS = 16;
@@ -53,6 +54,14 @@ export const useSearchStore = defineStore("search", {
         this.error = error instanceof Error ? error.message : String(error);
       }
       await this.search();
+      if (isTauri() && !this.notice && !this.error) {
+        try {
+          const update = await checkForUpdate();
+          if (update) this.notice = `发现新版本 ${update.version}，可在设置中更新`;
+        } catch {
+          /* 开发模式或尚未发布时忽略 */
+        }
+      }
     },
     async search() {
       this.loading = true;

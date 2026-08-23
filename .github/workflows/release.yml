@@ -1,10 +1,10 @@
 name: Release
 
 on:
-  workflow_dispatch:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 jobs:
   package:
@@ -18,10 +18,10 @@ jobs:
             args: --target x86_64-pc-windows-msvc --bundles nsis,msi
             rust_targets: x86_64-pc-windows-msvc
           - platform: macos-14
-            args: --target aarch64-apple-darwin --bundles dmg
+            args: --target aarch64-apple-darwin --bundles app,dmg
             rust_targets: aarch64-apple-darwin
           - platform: macos-13
-            args: --target x86_64-apple-darwin --bundles dmg
+            args: --target x86_64-apple-darwin --bundles app,dmg
             rust_targets: x86_64-apple-darwin
     runs-on: ${{ matrix.platform }}
     steps:
@@ -36,9 +36,21 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.rust_targets }}
+      - name: Sync version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: node scripts/set-version.mjs ${{ github.ref_name }}
       - run: pnpm install --frozen-lockfile
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
+          releaseName: Quka ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
+          releaseBody: 安装后进入后台，托盘或双击 Ctrl / Command 呼出搜索。
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true
           args: ${{ matrix.args }}

@@ -33,6 +33,8 @@ fn main() {
         .try_init();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .setup(|app| {
             let state = database::open(app.handle()).map_err(|error| error.to_string())?;
             let settings = {
@@ -105,6 +107,16 @@ mod packaging_tests {
         assert_eq!(
             value["bundle"]["windows"]["wix"]["upgradeCode"],
             "9e2c1a70-4d8f-5b31-8c6a-1f0e7d5b2a44"
+        );
+        assert_eq!(value["bundle"]["createUpdaterArtifacts"], true);
+        let endpoints = value["plugins"]["updater"]["endpoints"]
+            .as_array()
+            .expect("updater.endpoints");
+        assert!(
+            endpoints
+                .iter()
+                .any(|item| item.as_str().is_some_and(|url| url.contains("latest.json"))),
+            "缺少 latest.json 更新地址"
         );
     }
 

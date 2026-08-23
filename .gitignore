@@ -11,3 +11,4 @@ src-tauri/gen
 .idea
 .vscode
 *.log
+.tauri/

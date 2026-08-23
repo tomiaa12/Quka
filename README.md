@@ -101,6 +101,22 @@ src-tauri/target/<triple>/release/bundle/dmg/*.dmg
 
 将 `Quka.app` 拖入 Applications。打包后的应用为 Menu Bar 应用（不占 Dock）。
 
+## 发布与自动更新
+
+打版本标签后，GitHub Actions 会按标签号改版本、打包并发布到 Releases，同时生成 `latest.json` 供应用内更新。
+
+```bash
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+仓库需要配置 Secrets：
+
+- `TAURI_SIGNING_PRIVATE_KEY`：本地 `.tauri/quka.key` 的全部内容
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：本地 `.tauri/password.txt` 的内容
+
+私钥只保存在本机 `.tauri/`，不要提交。设置页可检查并安装更新。
+
 ## 项目架构
 
 ```text
