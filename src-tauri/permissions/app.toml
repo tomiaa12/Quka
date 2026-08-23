@@ -1,0 +1,20 @@
+[[permission]]
+identifier = "app-db"
+description = "Allow SQLite application and settings commands"
+commands.allow = [
+  "get_applications",
+  "get_application",
+  "insert_application",
+  "update_application",
+  "delete_application",
+  "get_database_info",
+  "rescan_applications",
+  "launch_application",
+  "search_applications",
+  "get_settings",
+  "update_settings",
+  "get_shortcut_status",
+  "register_global_shortcut",
+  "unregister_global_shortcut",
+  "change_global_shortcut"
+]
