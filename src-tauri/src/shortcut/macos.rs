@@ -34,16 +34,47 @@ mod native {
     use super::{ModifierKind, PlatformHandle};
     use crate::shortcut::detect::{DoubleTapDetector, KeyClass};
     use crate::state::AppError;
+    use core_foundation::base::TCFType;
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
+    use core_foundation::mach_port::CFMachPortRef;
     use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop};
+    use core_foundation::string::{CFString, CFStringRef};
     use core_graphics::event::{
         CallbackResult, CGEventFlags, CGEventTap, CGEventTapLocation, CGEventTapOptions,
         CGEventTapPlacement, CGEventType, EventField, KeyCode,
     };
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
     use std::sync::{mpsc, Arc, Mutex};
     use std::time::Instant;
 
     static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
+    }
+
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn AXIsProcessTrusted() -> bool;
+        fn AXIsProcessTrustedWithOptions(options: CFDictionaryRef) -> bool;
+        static kAXTrustedCheckOptionPrompt: CFStringRef;
+    }
+
+    const ACCESSIBILITY_HINT: &str =
+        "快捷键注册失败：请在系统设置 › 隐私与安全性 › 辅助功能 中允许 Quka";
+
+    fn request_accessibility_access() -> bool {
+        unsafe {
+            if AXIsProcessTrusted() {
+                return true;
+            }
+            let key = CFString::wrap_under_get_rule(kAXTrustedCheckOptionPrompt);
+            let options = CFDictionary::from_CFType_pairs(&[(key, CFBoolean::true_value())]);
+            AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef())
+        }
+    }
 
     pub fn start(
         kind: ModifierKind,
@@ -94,19 +125,25 @@ mod native {
         trigger_tx: mpsc::SyncSender<()>,
         ready_tx: &mpsc::Sender<Result<CFRunLoop, AppError>>,
     ) -> Result<(), AppError> {
-        let tap = create_tap(
-            CGEventTapLocation::Session,
-            generation,
-            detector.clone(),
-            trigger_tx.clone(),
-        )
-        .or_else(|_| create_tap(CGEventTapLocation::HID, generation, detector, trigger_tx))
-        .map_err(|()| {
-            AppError::Shortcut(
-                "快捷键注册失败：请在系统设置 › 隐私与安全性 › 辅助功能 中允许 Quka".into(),
-            )
-        })?;
+        if !request_accessibility_access() {
+            log::warn!("尚未授予辅助功能权限，全局快捷键无法在其它应用中生效");
+        }
 
+        let port_slot = Arc::new(AtomicUsize::new(0));
+        let tap = create_tap(
+            CGEventTapLocation::HID,
+            generation,
+            detector,
+            trigger_tx,
+            port_slot.clone(),
+        )
+        .map_err(|()| AppError::Shortcut(ACCESSIBILITY_HINT.into()))?;
+        log::info!("已使用 HID 全局快捷键监听");
+
+        port_slot.store(
+            tap.mach_port().as_concrete_TypeRef() as usize,
+            Ordering::SeqCst,
+        );
         let loop_source = tap
             .mach_port()
             .create_runloop_source(0)
@@ -117,6 +154,7 @@ mod native {
         ready_tx
             .send(Ok(run_loop.clone()))
             .map_err(|error| AppError::Shortcut(error.to_string()))?;
+        log::info!("快捷键监听已启动");
         CFRunLoop::run_current();
         Ok(())
     }
@@ -126,6 +164,7 @@ mod native {
         generation: u64,
         detector: Arc<Mutex<DoubleTapDetector>>,
         trigger_tx: mpsc::SyncSender<()>,
+        port_slot: Arc<AtomicUsize>,
     ) -> Result<CGEventTap<'static>, ()> {
         CGEventTap::new(
             location,
@@ -137,6 +176,17 @@ mod native {
                 CGEventType::FlagsChanged,
             ],
             move |_proxy, event_type, event| {
+                if matches!(
+                    event_type,
+                    CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput
+                ) {
+                    log::warn!("快捷键监听被系统停用，正在重新启用");
+                    let port = port_slot.load(Ordering::SeqCst);
+                    if port != 0 {
+                        unsafe { CGEventTapEnable(port as CFMachPortRef, true) }
+                    }
+                    return CallbackResult::Keep;
+                }
                 if GENERATION.load(Ordering::SeqCst) != generation {
                     return CallbackResult::Keep;
                 }
