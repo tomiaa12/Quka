@@ -45,7 +45,8 @@ pub fn sync_scanned(
                 || old.path != app.path
                 || old.bundle_id != app.bundle_id
                 || old.icon != app.icon
-                || old.source != app.source;
+                || old.source != app.source
+                || old.aliases != app.aliases;
             if !changed {
                 continue;
             }
@@ -111,6 +112,7 @@ mod tests {
             source: source.into(),
             launch_count: 0,
             last_launch_time: None,
+            aliases: String::new(),
         }
     }
 

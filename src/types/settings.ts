@@ -1,4 +1,5 @@
 export type ThemeMode = "system" | "light" | "dark";
+export type LocaleMode = "system" | "zh-CN" | "en";
 
 export interface SettingsState {
   globalShortcut: string;
@@ -6,4 +7,5 @@ export interface SettingsState {
   resultLimit: number;
   enableUsageRanking: boolean;
   theme: ThemeMode;
+  locale: LocaleMode;
 }

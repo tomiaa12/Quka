@@ -316,6 +316,7 @@ fn read_shortcut(link_path: &Path, source: &str) -> Result<Option<Application>, 
         source: source.into(),
         launch_count: 0,
         last_launch_time: None,
+        aliases: String::new(),
     }))
 }
 
@@ -330,6 +331,7 @@ fn app_from_link_file(link_path: &Path, name: &str, source: &str) -> Application
         source: source.into(),
         launch_count: 0,
         last_launch_time: None,
+        aliases: String::new(),
     }
 }
 
@@ -353,6 +355,7 @@ fn read_executable(exe_path: &Path, source: &str) -> Result<Option<Application>,
         source: source.into(),
         launch_count: 0,
         last_launch_time: None,
+        aliases: String::new(),
     }))
 }
 
@@ -524,6 +527,7 @@ mod tests {
                 source: "start-menu".into(),
                 launch_count: 0,
                 last_launch_time: None,
+                aliases: String::new(),
             },
             Application {
                 id: "2".into(),
@@ -534,6 +538,7 @@ mod tests {
                 source: "program-files".into(),
                 launch_count: 0,
                 last_launch_time: None,
+                aliases: String::new(),
             },
         ];
         let unique = dedup_by_target(apps);

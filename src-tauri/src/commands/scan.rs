@@ -50,8 +50,10 @@ pub async fn run_rescan(app: &AppHandle) -> Result<ScanResult, AppError> {
         sync_windows(&conn, scanned)?
     };
     let application_count = count(&conn)?;
+    crate::database::migrations::mark_scan_schema(&conn)?;
     drop(conn);
     state.refresh_index()?;
+    state.clear_needs_rescan();
     log::info!(
         "扫描结束：共 {} 个应用，新增 {}，更新 {}，删除 {}",
         application_count,

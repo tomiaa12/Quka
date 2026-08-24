@@ -18,6 +18,8 @@ struct InfoPlist {
     name: Option<String>,
     #[serde(rename = "CFBundleIdentifier")]
     bundle_id: Option<String>,
+    #[serde(rename = "CFBundleExecutable")]
+    executable: Option<String>,
     #[serde(rename = "CFBundleIconFile")]
     icon_file: Option<String>,
     #[serde(rename = "CFBundleIconName")]
@@ -104,12 +106,33 @@ fn read_application(app_path: &Path, icon_dir: &Path, home_dir: &Path) -> Result
         .and_then(|name| name.to_str())
         .unwrap_or("Untitled")
         .to_string();
-    let plist = read_info_plist(&app_path.join("Contents").join("Info.plist"));
+    let plist = read_info_plist(&app_path.join("Contents").join("Info.plist"), true);
     let bundle_id = plist.as_ref().and_then(|info| non_empty(&info.bundle_id));
-    let name = plist
-        .as_ref()
-        .and_then(|info| non_empty(&info.display_name).or_else(|| non_empty(&info.name)))
-        .unwrap_or(file_name);
+    let localized = read_localized_names(app_path);
+    let mut candidates = Vec::new();
+    push_unique(
+        &mut candidates,
+        plist
+            .as_ref()
+            .and_then(|info| non_empty(&info.display_name)),
+    );
+    push_unique(
+        &mut candidates,
+        plist.as_ref().and_then(|info| non_empty(&info.name)),
+    );
+    push_unique(
+        &mut candidates,
+        plist
+            .as_ref()
+            .and_then(|info| non_empty(&info.executable)),
+    );
+    push_unique(&mut candidates, Some(file_name.clone()));
+    for (_, name) in &localized {
+        push_unique(&mut candidates, Some(name.clone()));
+    }
+
+    let name = pick_display_name(&localized, &candidates, &file_name);
+    let aliases = join_aliases(&name, &candidates);
     let icon_file = plist
         .as_ref()
         .and_then(|info| non_empty(&info.icon_file).or_else(|| non_empty(&info.icon_name)));
@@ -126,16 +149,222 @@ fn read_application(app_path: &Path, icon_dir: &Path, home_dir: &Path) -> Result
         source: source_for_path(app_path, home_dir),
         launch_count: 0,
         last_launch_time: None,
+        aliases,
     })
 }
 
-fn read_info_plist(path: &Path) -> Option<InfoPlist> {
-    match plist::from_file::<_, InfoPlist>(path) {
-        Ok(info) => Some(info),
-        Err(error) => {
-            log::warn!("无法读取 Info.plist {}：{error}", path.display());
-            None
+fn read_localized_names(app_path: &Path) -> Vec<(String, String)> {
+    let resources = app_path.join("Contents").join("Resources");
+    let Ok(entries) = fs::read_dir(&resources) else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(folder) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Some(locale) = folder.strip_suffix(".lproj") else {
+            continue;
+        };
+        let Some(info) = read_info_plist(&path.join("InfoPlist.strings"), false) else {
+            continue;
+        };
+        if let Some(name) = non_empty(&info.display_name).or_else(|| non_empty(&info.name)) {
+            names.push((locale.to_string(), name));
         }
+    }
+    names
+}
+
+fn pick_display_name(localized: &[(String, String)], fallbacks: &[String], file_name: &str) -> String {
+    let preferred = sys_locale::get_locale().unwrap_or_else(|| "en".into());
+    let mut best: Option<(u8, &str)> = None;
+    for (locale, name) in localized {
+        let score = locale_preference(locale, &preferred);
+        if score >= 20 {
+            continue;
+        }
+        match best {
+            None => best = Some((score, name)),
+            Some((current, _)) if score < current => best = Some((score, name)),
+            _ => {}
+        }
+    }
+    if let Some((_, name)) = best {
+        return name.to_string();
+    }
+    fallbacks
+        .iter()
+        .find(|item| !item.is_empty())
+        .cloned()
+        .unwrap_or_else(|| file_name.to_string())
+}
+
+fn locale_preference(lproj: &str, preferred: &str) -> u8 {
+    let locale = normalize_locale_tag(lproj);
+    let wanted = normalize_locale_tag(preferred);
+    if locale == wanted {
+        return 0;
+    }
+    if is_zh_simplified(&locale) && is_zh_simplified(&wanted) {
+        return 1;
+    }
+    if is_zh_traditional(&locale) && is_zh_traditional(&wanted) {
+        return 1;
+    }
+    if lang(&locale) == lang(&wanted) {
+        return 2;
+    }
+    20
+}
+
+fn normalize_locale_tag(value: &str) -> String {
+    value.trim().replace('_', "-").to_ascii_lowercase()
+}
+
+fn lang(tag: &str) -> &str {
+    tag.split('-').next().unwrap_or(tag)
+}
+
+fn is_zh_simplified(tag: &str) -> bool {
+    tag == "zh" || tag.starts_with("zh-hans") || tag.starts_with("zh-cn") || tag.starts_with("zh-sg")
+}
+
+fn is_zh_traditional(tag: &str) -> bool {
+    tag.starts_with("zh-hant")
+        || tag.starts_with("zh-tw")
+        || tag.starts_with("zh-hk")
+        || tag.starts_with("zh-mo")
+}
+
+fn join_aliases(display: &str, candidates: &[String]) -> String {
+    let mut seen = HashSet::new();
+    seen.insert(display.to_lowercase());
+    let mut aliases = Vec::new();
+    for name in candidates {
+        if seen.insert(name.to_lowercase()) {
+            aliases.push(name.clone());
+        }
+    }
+    aliases.join("\n")
+}
+
+fn push_unique(names: &mut Vec<String>, value: Option<String>) {
+    let Some(name) = value else {
+        return;
+    };
+    if name.is_empty() || names.iter().any(|item| item.eq_ignore_ascii_case(&name)) {
+        return;
+    }
+    names.push(name);
+}
+
+fn read_info_plist(path: &Path, warn: bool) -> Option<InfoPlist> {
+    if !path.is_file() {
+        if warn {
+            log::warn!("无法读取 Info.plist {}：文件不存在", path.display());
+        }
+        return None;
+    }
+    if let Ok(info) = plist::from_file::<_, InfoPlist>(path) {
+        return Some(info);
+    }
+    if let Some(info) = read_strings_plist(path) {
+        return Some(info);
+    }
+    if warn {
+        log::warn!("无法读取 Info.plist {}", path.display());
+    }
+    None
+}
+
+fn read_strings_plist(path: &Path) -> Option<InfoPlist> {
+    let bytes = fs::read(path).ok()?;
+    let text = decode_strings(&bytes)?;
+    let entries = parse_strings(&text);
+    if entries.is_empty() {
+        return None;
+    }
+    Some(InfoPlist {
+        display_name: entries.get("CFBundleDisplayName").cloned(),
+        name: entries.get("CFBundleName").cloned(),
+        bundle_id: entries.get("CFBundleIdentifier").cloned(),
+        executable: entries.get("CFBundleExecutable").cloned(),
+        icon_file: entries.get("CFBundleIconFile").cloned(),
+        icon_name: entries.get("CFBundleIconName").cloned(),
+    })
+}
+
+fn decode_strings(bytes: &[u8]) -> Option<String> {
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        let values: Vec<u16> = bytes[2..]
+            .chunks(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk.get(1).copied().unwrap_or(0)]))
+            .collect();
+        return String::from_utf16(&values).ok();
+    }
+    if bytes.starts_with(&[0xFE, 0xFF]) {
+        let values: Vec<u16> = bytes[2..]
+            .chunks(2)
+            .map(|chunk| u16::from_be_bytes([chunk[0], chunk.get(1).copied().unwrap_or(0)]))
+            .collect();
+        return String::from_utf16(&values).ok();
+    }
+    String::from_utf8(bytes.to_vec()).ok()
+}
+
+fn parse_strings(text: &str) -> std::collections::HashMap<String, String> {
+    let stripped = strip_c_comments(text);
+    let mut entries = std::collections::HashMap::new();
+    for line in stripped.lines() {
+        let Some((key, value)) = parse_strings_assignment(line) else {
+            continue;
+        };
+        entries.insert(key, value);
+    }
+    entries
+}
+
+fn strip_c_comments(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            while let Some(next) = chars.next() {
+                if next == '*' && chars.peek() == Some(&'/') {
+                    chars.next();
+                    break;
+                }
+            }
+            continue;
+        }
+        out.push(ch);
+    }
+    out
+}
+
+fn parse_strings_assignment(line: &str) -> Option<(String, String)> {
+    let line = line.trim().trim_end_matches(';').trim();
+    let index = line.find('=')?;
+    let key = unquote(&line[..index]);
+    let value = unquote(&line[index + 1..]);
+    if key.is_empty() || value.is_empty() {
+        return None;
+    }
+    Some((key, value))
+}
+
+fn unquote(text: &str) -> String {
+    let text = text.trim();
+    if text.len() >= 2 && text.starts_with('"') && text.ends_with('"') {
+        text[1..text.len() - 1]
+            .replace("\\\"", "\"")
+            .replace("\\n", "\n")
+            .replace("\\\\", "\\")
+    } else {
+        text.to_string()
     }
 }
 
@@ -183,8 +412,8 @@ fn dedup_applications(apps: Vec<Application>) -> Vec<Application> {
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_app_bundles, dedup_applications, is_app_bundle, read_application, source_for_path,
-        MacOsScanner,
+        collect_app_bundles, dedup_applications, is_app_bundle, parse_strings, read_application,
+        source_for_path, MacOsScanner,
     };
     use crate::database::models::Application;
     use crate::scanner::ApplicationScanner;
@@ -286,6 +515,7 @@ mod tests {
                 source: "applications".into(),
                 launch_count: 0,
                 last_launch_time: None,
+                aliases: String::new(),
             },
             Application {
                 id: "com.google.Chrome".into(),
@@ -296,6 +526,7 @@ mod tests {
                 source: "user".into(),
                 launch_count: 0,
                 last_launch_time: None,
+                aliases: String::new(),
             },
         ];
         let unique = dedup_applications(apps);
@@ -349,10 +580,84 @@ mod tests {
     }
 
     #[test]
+    fn parses_old_style_strings() {
+        let entries = parse_strings(
+            r#"
+/* comment */
+CFBundleDisplayName = "飞书";
+"CFBundleName" = "飞书";
+"#,
+        );
+        assert_eq!(entries.get("CFBundleDisplayName").map(String::as_str), Some("飞书"));
+        assert_eq!(entries.get("CFBundleName").map(String::as_str), Some("飞书"));
+    }
+
+    fn write_strings(app: &Path, locale: &str, display: &str, name: &str) {
+        let dir = app.join("Contents").join("Resources").join(format!("{locale}.lproj"));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(
+            dir.join("InfoPlist.strings"),
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDisplayName</key>
+  <string>{display}</string>
+  <key>CFBundleName</key>
+  <string>{name}</string>
+</dict>
+</plist>
+"#
+            ),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn indexes_localized_feishu_aliases() {
+        let root = temp_dir("feishu");
+        let app = write_app(&root, "Lark.app", "Lark", "Feishu", "com.bytedance.macos.feishu");
+        write_strings(&app, "zh_CN", "飞书", "飞书");
+        write_strings(&app, "en", "Feishu", "Feishu");
+        let icon_dir = root.join("icons");
+        let scanned = read_application(&app, &icon_dir, &root.join("home")).unwrap();
+        let names = scanned.search_names();
+        assert!(
+            names.iter().any(|name| *name == "飞书"),
+            "localized name missing: {names:?}"
+        );
+        assert!(names.iter().any(|name| name.eq_ignore_ascii_case("feishu")));
+        assert!(names.iter().any(|name| name.eq_ignore_ascii_case("lark")));
+        assert!(crate::database::search::score_application(&scanned, "飞书") > 0);
+        assert!(crate::database::search::score_application(&scanned, "feishu") > 0);
+        assert!(crate::database::search::score_application(&scanned, "fs") > 0);
+        assert!(crate::database::search::score_application(&scanned, "lark") > 0);
+    }
+
+    #[test]
+    fn reads_installed_feishu_if_present() {
+        let app = PathBuf::from("/Applications/Lark.localized/Lark.app");
+        if !app.is_dir() {
+            return;
+        }
+        let root = temp_dir("real-feishu");
+        let scanned = read_application(&app, &root.join("icons"), &root.join("home")).unwrap();
+        let names = scanned.search_names();
+        assert!(
+            names.iter().any(|name| *name == "飞书"),
+            "expected 飞书 in {names:?}"
+        );
+        assert!(crate::database::search::score_application(&scanned, "飞书") > 0);
+        assert!(crate::database::search::score_application(&scanned, "fs") > 0);
+        assert!(crate::database::search::score_application(&scanned, "feishu") > 0);
+    }
+
+    #[test]
     fn trait_scan_uses_standard_paths() {
         let root = temp_dir("trait");
         let scanner = MacOsScanner::new(root.join("home"), root.join("icons"));
         let apps = ApplicationScanner::scan(&scanner).unwrap();
-        assert!(apps.is_empty());
+        assert!(apps.iter().all(|app| !app.name.is_empty()));
     }
 }

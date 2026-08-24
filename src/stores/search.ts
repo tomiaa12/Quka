@@ -7,6 +7,7 @@ import {
 } from "../services/app";
 import { searchApplications } from "../services/search";
 import { checkForUpdate } from "../services/update";
+import { t } from "../i18n";
 import { hideSearchWindow, isTauri } from "../services/window";
 import type { Application } from "../types/application";
 
@@ -42,12 +43,12 @@ export const useSearchStore = defineStore("search", {
           this.scanning = true;
           try {
             const result = await rescanApplications();
-            this.notice = `发现 ${result.applicationCount} 个应用`;
+            this.notice = t("search.foundApps", { n: result.applicationCount });
           } finally {
             this.scanning = false;
           }
         } else if (info.justInitialized) {
-          this.notice = `发现 ${info.applicationCount} 个应用，已写入本地 SQLite`;
+          this.notice = t("search.foundAppsSaved", { n: info.applicationCount });
         }
       } catch (error) {
         this.scanning = false;
@@ -57,7 +58,7 @@ export const useSearchStore = defineStore("search", {
       if (isTauri() && !this.notice && !this.error) {
         try {
           const update = await checkForUpdate();
-          if (update) this.notice = `发现新版本 ${update.version}，可在设置中更新`;
+          if (update) this.notice = t("search.updateAvailable", { version: update.version });
         } catch {
           /* 开发模式或尚未发布时忽略 */
         }

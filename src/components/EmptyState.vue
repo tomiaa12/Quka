@@ -1,34 +1,38 @@
 <script setup lang="ts">
+import { computed } from "vue";
+import { useI18n } from "../i18n/use-i18n";
 import type { ScannerName } from "../services/app";
 
-defineProps<{
+const props = defineProps<{
   variant: "hint" | "empty" | "loading" | "scanning";
   scanner?: ScannerName;
 }>();
+
+const { t } = useI18n();
+
+const title = computed(() => {
+  if (props.variant === "scanning" && props.scanner === "windows") return t("empty.scanningWindows");
+  if (props.variant === "scanning" && props.scanner === "macos") return t("empty.scanningMac");
+  if (props.variant === "scanning") return t("empty.scanning");
+  if (props.variant === "loading") return t("empty.loading");
+  if (props.variant === "empty") return t("empty.none");
+  return t("empty.hint");
+});
+
+const desc = computed(() => {
+  if (props.variant === "scanning" && props.scanner === "windows") return t("empty.scanningWindowsDesc");
+  if (props.variant === "scanning" && props.scanner === "macos") return t("empty.scanningMacDesc");
+  if (props.variant === "scanning") return t("empty.scanningDesc");
+  if (props.variant === "loading") return t("empty.loadingDesc");
+  if (props.variant === "empty") return t("empty.noneDesc");
+  return t("empty.hintDesc");
+});
 </script>
 
 <template>
   <div class="state">
     <div v-if="variant === 'loading' || variant === 'scanning'" class="spinner"></div>
-    <div class="state-title">
-      <template v-if="variant === 'scanning' && scanner === 'windows'">正在扫描 Windows 应用...</template>
-      <template v-else-if="variant === 'scanning' && scanner === 'macos'">正在扫描 macOS 应用...</template>
-      <template v-else-if="variant === 'scanning'">正在扫描应用...</template>
-      <template v-else-if="variant === 'loading'">搜索中</template>
-      <template v-else-if="variant === 'empty'">没有找到应用</template>
-      <template v-else>搜索应用...</template>
-    </div>
-    <div class="state-desc">
-      <template v-if="variant === 'scanning' && scanner === 'windows'">
-        Start Menu · Program Files · LocalAppData\Programs
-      </template>
-      <template v-else-if="variant === 'scanning' && scanner === 'macos'">
-        /Applications · ~/Applications · /System/Applications
-      </template>
-      <template v-else-if="variant === 'scanning'">正在索引本机已安装的软件</template>
-      <template v-else-if="variant === 'loading'">正在匹配本地应用索引</template>
-      <template v-else-if="variant === 'empty'">试试更短的关键词，或确认应用已经安装</template>
-      <template v-else>输入名称即可查找并启动已安装的软件</template>
-    </div>
+    <div class="state-title">{{ title }}</div>
+    <div class="state-desc">{{ desc }}</div>
   </div>
 </template>

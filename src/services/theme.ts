@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { ThemeMode } from "../types/settings";
 
 export function resolveTheme(theme: ThemeMode): "light" | "dark" {
@@ -12,9 +13,9 @@ export function applyTheme(theme: ThemeMode): void {
 }
 
 export function themeLabel(theme: ThemeMode): string {
-  if (theme === "system") return "System";
-  if (theme === "light") return "Light";
-  return "Dark";
+  if (theme === "system") return t("theme.system");
+  if (theme === "light") return t("theme.light");
+  return t("theme.dark");
 }
 
 export function nextTheme(theme: ThemeMode): ThemeMode {

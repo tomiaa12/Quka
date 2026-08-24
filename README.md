@@ -1,133 +1,76 @@
-# Quka
+[中文文档](./README-zh.md)
 
-一个类似 Listary / Alfred / Raycast 的极简跨平台应用启动器。
+<p align="center">
+  <img src="screenshots/icon.png" width="88" alt="Quka">
+</p>
 
-第一阶段只做一件事：快速搜索并启动 Windows / macOS 上已经安装的软件。
+<h1 align="center">Quka</h1>
 
-当前进度：**Phase 11 打包**。可构建 Windows `.exe` / `.msi` 与 macOS `.dmg`。启动后进入后台，托盘或 Menu Bar 可呼出搜索。
+<p align="center">
+  A minimal app launcher for Windows and macOS.<br>
+  Double-tap a modifier key, type a few letters, press Enter.
+</p>
 
-## 技术栈
+<p align="center">
+  <a href="https://github.com/tomiaa12/Quka/releases/latest"><img alt="Download" src="https://img.shields.io/github/v/release/tomiaa12/Quka?label=download"></a>
+  <img alt="Platforms" src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS-4f6ef7">
+</p>
 
-- Frontend: Vue 3, TypeScript, Vite, Pinia
-- Desktop: Tauri 2, Rust
-- Database: SQLite
+Quka stays in the menu bar on macOS and the system tray on Windows. It indexes apps you already have installed, then gets out of the way until you need it — in the same spirit as Listary, Alfred, or Raycast, but focused on one job: **find an app and launch it**.
 
-## 开发环境
+## Screenshots
 
-- Node.js >= 20
-- pnpm >= 9
-- Rust stable
-- Windows 需要 WebView2 与 MSVC 构建工具
-- macOS 需要 Xcode Command Line Tools
+<p align="center">
+  <img src="screenshots/search.png" width="640" alt="Search window with recent apps">
+</p>
 
-## 安装依赖
+<p align="center">
+  <img src="screenshots/search-dark.png" width="320" alt="Search window in dark theme">
+  &nbsp;
+  <img src="screenshots/settings.png" width="320" alt="General settings">
+</p>
 
-```bash
-pnpm install
-```
+<p align="center">
+  <img src="screenshots/settings-search.png" width="640" alt="Search settings">
+</p>
 
-## 启动项目
+## Features
 
-前端：
+- **Double-tap to open** — Command on macOS, Ctrl on Windows. Switch to Alt or the other modifier in Settings.
+- **Fast local search** — Type part of a name. Chinese names also match pinyin and initials.
+- **Recent apps first** — An empty query shows what you launched last.
+- **Usage ranking** — Frequently used apps float higher as you keep launching them.
+- **Finds installed apps** — Scans the apps already on your Mac or PC, and keeps their icons locally.
+- **Stays in the background** — Menu bar / tray app. No Dock icon after install on macOS.
+- **Light, dark, or system theme**
+- **English and 简体中文** — follows the system language, or pick one in Settings
+- **Launch at login**
+- **In-app updates** from GitHub Releases
 
-```bash
-pnpm dev
-```
+## Install
 
-桌面应用：
+Download the latest build from [Releases](https://github.com/tomiaa12/Quka/releases/latest).
 
-```bash
-pnpm tauri dev
-```
+| Platform | Installer |
+| --- | --- |
+| Windows | `.exe` or `.msi` |
+| macOS (Apple Silicon) | `.dmg` |
+| macOS (Intel) | `.dmg` |
 
-## 开发命令
+On Windows, the installer can download WebView2 if it is missing, then start Quka in the background.
 
-```bash
-pnpm install
-pnpm dev
-pnpm tauri dev
-```
+On macOS, drag `Quka.app` into Applications. The first time you use the global shortcut, allow Quka under **System Settings → Privacy & Security → Accessibility**.
 
-## 构建命令
+## Usage
 
-```bash
-pnpm tauri build
-```
+1. Double-tap **Command** (macOS) or **Ctrl** (Windows).
+2. Type part of an app name, or pick from recents.
+3. Press **Enter** to launch. **Esc** hides the window.
 
-当前平台会按 `tauri.conf.json` 打出对应安装包：Windows 为 NSIS / MSI，macOS 为 DMG。
+The tray / menu bar icon can also open search, open Settings, rescan apps, or quit.
 
-### Windows 构建
-
-在 Windows 10/11、目标 `x86_64-pc-windows-msvc`：
-
-```bash
-pnpm tauri:build:windows
-```
-
-产物：
-
-```text
-src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
-src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
-```
-
-安装后创建开始菜单快捷方式，并自动在后台启动。未预装 WebView2 时，安装程序会下载运行时。
-
-### macOS 构建
-
-Apple Silicon：
-
-```bash
-pnpm tauri:build:macos-arm
-```
-
-Intel：
-
-```bash
-pnpm tauri:build:macos-intel
-```
-
-通用二进制（需同时安装两个 Rust target）：
-
-```bash
-pnpm tauri:build:macos
-```
-
-产物：
-
-```text
-src-tauri/target/<triple>/release/bundle/dmg/*.dmg
-```
-
-将 `Quka.app` 拖入 Applications。打包后的应用为 Menu Bar 应用（不占 Dock）。
-
-## 发布与自动更新
-
-打版本标签后，GitHub Actions 会按标签号改版本、打包并发布到 Releases，同时生成 `latest.json` 供应用内更新。
-
-```bash
-git tag v0.1.1
-git push origin v0.1.1
-```
-
-仓库需要配置 Secrets：
-
-- `TAURI_SIGNING_PRIVATE_KEY`：本地 `.tauri/quka.key` 的全部内容
-- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：本地 `.tauri/password.txt` 的内容
-
-私钥只保存在本机 `.tauri/`，不要提交。设置页可检查并安装更新。
-
-## 项目架构
-
-```text
-src/                 Vue 3 UI
-src-tauri/src/       Rust 系统能力
-  commands/          Tauri Command
-  scanner/           应用扫描
-  launcher/          应用启动
-  shortcut/          全局快捷键
-  database/          SQLite
-  icon/              图标提取
-```
-
-前端只负责 UI 与状态。Windows / macOS 系统能力放在 Rust 中。
+| Key | Action |
+| --- | --- |
+| `↑` `↓` | Move selection |
+| `Enter` | Launch |
+| `Esc` | Hide |

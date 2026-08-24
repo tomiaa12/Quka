@@ -20,6 +20,7 @@ fn map_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Application> {
         source: row.get(5)?,
         launch_count: row.get(6)?,
         last_launch_time: row.get(7)?,
+        aliases: row.get::<_, Option<String>>(8)?.unwrap_or_default(),
     })
 }
 
@@ -29,8 +30,8 @@ pub fn insert(conn: &Connection, app: &Application) -> Result<(), AppError> {
         "
         INSERT INTO applications (
             id, name, path, bundle_id, icon, source,
-            launch_count, last_launch_time, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)
+            launch_count, last_launch_time, aliases, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)
         ",
         params![
             app.id,
@@ -41,6 +42,7 @@ pub fn insert(conn: &Connection, app: &Application) -> Result<(), AppError> {
             app.source,
             app.launch_count,
             app.last_launch_time,
+            app.aliases,
             timestamp,
         ],
     )?;
@@ -59,7 +61,8 @@ pub fn update(conn: &Connection, app: &Application) -> Result<(), AppError> {
             source = ?6,
             launch_count = ?7,
             last_launch_time = ?8,
-            updated_at = ?9
+            aliases = ?9,
+            updated_at = ?10
         WHERE id = ?1
         ",
         params![
@@ -71,6 +74,7 @@ pub fn update(conn: &Connection, app: &Application) -> Result<(), AppError> {
             app.source,
             app.launch_count,
             app.last_launch_time,
+            app.aliases,
             timestamp,
         ],
     )?;
@@ -111,7 +115,7 @@ pub fn get_by_id(conn: &Connection, id: &str) -> Result<Option<Application>, App
     let app = conn
         .query_row(
             "
-            SELECT id, name, path, bundle_id, icon, source, launch_count, last_launch_time
+            SELECT id, name, path, bundle_id, icon, source, launch_count, last_launch_time, aliases
             FROM applications
             WHERE id = ?1
             ",
@@ -125,7 +129,7 @@ pub fn get_by_id(conn: &Connection, id: &str) -> Result<Option<Application>, App
 pub fn query_all(conn: &Connection) -> Result<Vec<Application>, AppError> {
     let mut statement = conn.prepare(
         "
-        SELECT id, name, path, bundle_id, icon, source, launch_count, last_launch_time
+        SELECT id, name, path, bundle_id, icon, source, launch_count, last_launch_time, aliases
         FROM applications
         ORDER BY last_launch_time DESC, launch_count DESC, name ASC
         ",
@@ -170,6 +174,7 @@ mod tests {
                 source: "system".into(),
                 launch_count: 2,
                 last_launch_time: None,
+                aliases: String::new(),
             },
         )
         .unwrap();
@@ -214,6 +219,7 @@ mod tests {
                     source: "system".into(),
                     launch_count: index,
                     last_launch_time: Some(index),
+                    aliases: String::new(),
                 },
             )
             .unwrap();

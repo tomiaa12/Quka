@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import { useI18n } from "../i18n/use-i18n";
 import { appIconImageSrc, appIconSvg, isCachedIconPath } from "../services/icon";
 import { highlightName } from "../services/search";
 import type { Application } from "../types/application";
+
+const { t } = useI18n();
 
 const props = defineProps<{
   app: Application;
@@ -23,7 +26,7 @@ const imageSrc = computed(() =>
 const icon = computed(() => appIconSvg(props.app.icon));
 const parts = computed(() => highlightName(props.app.name, props.keyword));
 const subtitle = computed(() => {
-  if (props.recent) return "最近使用";
+  if (props.recent) return t("app.recent");
   if (props.app.bundleId) return `${props.app.path} · ${props.app.bundleId}`;
   return props.app.path;
 });
@@ -31,7 +34,7 @@ const meta = computed(() => {
   if (props.selected && !props.recent && props.elapsedMs && props.elapsedMs > 0) {
     return `${props.elapsedMs} ms`;
   }
-  return props.selected ? "回车启动" : "应用";
+  return props.selected ? t("app.launchEnter") : t("app.app");
 });
 </script>
 

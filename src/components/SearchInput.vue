@@ -3,6 +3,7 @@ import { onMounted, ref } from "vue";
 
 const props = defineProps<{
   modelValue: string;
+  placeholder?: string;
 }>();
 
 const emit = defineEmits<{
@@ -45,7 +46,7 @@ defineExpose({ focus });
       class="search-field"
       :value="props.modelValue"
       type="text"
-      placeholder="搜索应用..."
+      :placeholder="props.placeholder"
       spellcheck="false"
       autocomplete="off"
       @input="onInput"

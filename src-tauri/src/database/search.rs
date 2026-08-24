@@ -64,8 +64,56 @@ fn score_text(text: &str, tokens: &[String], query: &str) -> i64 {
     0
 }
 
-fn score_pinyin(name: &str, query: &str) -> i64 {
-    let (full, initials) = pinyin_keys(name);
+pub fn score_application(app: &Application, keyword: &str) -> i64 {
+    let query = keyword.trim().to_lowercase();
+    if query.is_empty() {
+        return 0;
+    }
+    IndexedApplication::from_app(app.clone()).score(&query)
+}
+
+pub fn filter_applications(
+    apps: &[Application],
+    keyword: &str,
+    limit: usize,
+    enable_usage_ranking: bool,
+) -> Vec<Application> {
+    SearchIndex::build(apps.to_vec(), limit as i64, enable_usage_ranking).search(keyword)
+}
+
+#[derive(Debug, Clone)]
+struct NameIndex {
+    lower: String,
+    tokens: Vec<String>,
+    token_joined: String,
+    token_initials: String,
+    pinyin_full: String,
+    pinyin_initials: String,
+}
+
+impl NameIndex {
+    fn new(name: &str) -> Self {
+        let tokens = words(name);
+        let token_joined = tokens.join("");
+        let token_initials: String = tokens.iter().filter_map(|token| token.chars().next()).collect();
+        let (pinyin_full, pinyin_initials) = pinyin_keys(name);
+        Self {
+            lower: name.to_lowercase(),
+            tokens,
+            token_joined,
+            token_initials,
+            pinyin_full,
+            pinyin_initials,
+        }
+    }
+
+    fn score(&self, query: &str) -> i64 {
+        score_text(&self.lower, &self.tokens, query)
+            .max(score_pinyin_parts(&self.pinyin_full, &self.pinyin_initials, query))
+    }
+}
+
+fn score_pinyin_parts(full: &str, initials: &str, query: &str) -> i64 {
     if full.is_empty() {
         return 0;
     }
@@ -81,110 +129,54 @@ fn score_pinyin(name: &str, query: &str) -> i64 {
     if full.contains(query) || initials.contains(query) {
         return 520;
     }
-    if is_subsequence(&full, query) || is_subsequence(&initials, query) {
+    if is_subsequence(full, query) || is_subsequence(initials, query) {
         return 280;
     }
     0
-}
-
-pub fn score_application(app: &Application, keyword: &str) -> i64 {
-    let query = keyword.trim().to_lowercase();
-    if query.is_empty() {
-        return 0;
-    }
-
-    let name = app.name.to_lowercase();
-    let tokens = words(&app.name);
-    score_text(&name, &tokens, &query).max(score_pinyin(&app.name, &query))
-}
-
-pub fn filter_applications(
-    apps: &[Application],
-    keyword: &str,
-    limit: usize,
-    enable_usage_ranking: bool,
-) -> Vec<Application> {
-    SearchIndex::build(apps.to_vec(), limit as i64, enable_usage_ranking).search(keyword)
 }
 
 #[derive(Debug, Clone)]
 struct IndexedApplication {
     app: Application,
-    name_lower: String,
-    tokens: Vec<String>,
-    token_joined: String,
-    token_initials: String,
-    pinyin_full: String,
-    pinyin_initials: String,
+    names: Vec<NameIndex>,
 }
 
 impl IndexedApplication {
     fn from_app(app: Application) -> Self {
-        let name_lower = app.name.to_lowercase();
-        let tokens = words(&app.name);
-        let token_joined = tokens.join("");
-        let token_initials: String = tokens.iter().filter_map(|token| token.chars().next()).collect();
-        let (pinyin_full, pinyin_initials) = pinyin_keys(&app.name);
-        Self {
-            app,
-            name_lower,
-            tokens,
-            token_joined,
-            token_initials,
-            pinyin_full,
-            pinyin_initials,
+        let mut names: Vec<NameIndex> = app
+            .search_names()
+            .into_iter()
+            .map(NameIndex::new)
+            .collect();
+        if let Some(bundle_id) = app.bundle_id.as_deref() {
+            if let Some(last) = bundle_id.split('.').next_back() {
+                if last.len() >= 3
+                    && !names
+                        .iter()
+                        .any(|item| item.lower == last.to_ascii_lowercase())
+                {
+                    names.push(NameIndex::new(last));
+                }
+            }
         }
+        if let Some(stem) = std::path::Path::new(&app.path)
+            .file_stem()
+            .and_then(|value| value.to_str())
+        {
+            if stem.len() >= 2
+                && !names
+                    .iter()
+                    .any(|item| item.lower == stem.to_ascii_lowercase())
+            {
+                names.push(NameIndex::new(stem));
+            }
+        }
+        Self { app, names }
     }
 
     fn score(&self, query: &str) -> i64 {
-        score_text_indexed(self, query).max(score_pinyin_indexed(self, query))
+        self.names.iter().map(|name| name.score(query)).max().unwrap_or(0)
     }
-}
-
-fn score_text_indexed(item: &IndexedApplication, query: &str) -> i64 {
-    if item.name_lower == query {
-        return 1000;
-    }
-    if item.name_lower.starts_with(query) {
-        return 800;
-    }
-    if item.tokens.iter().any(|token| token.starts_with(query)) {
-        return 700;
-    }
-    if item.name_lower.contains(query) {
-        return 600;
-    }
-    if item.token_joined.starts_with(query)
-        || (!item.token_initials.is_empty() && item.token_initials.contains(query))
-    {
-        return 500;
-    }
-    if is_subsequence(&item.name_lower, query) {
-        return 300;
-    }
-    0
-}
-
-fn score_pinyin_indexed(item: &IndexedApplication, query: &str) -> i64 {
-    if item.pinyin_full.is_empty() {
-        return 0;
-    }
-    if item.pinyin_full == query || item.pinyin_initials == query {
-        return 900;
-    }
-    if item.pinyin_full.starts_with(query) {
-        return 760;
-    }
-    if item.pinyin_initials.starts_with(query) {
-        return 720;
-    }
-    if item.pinyin_full.contains(query) || item.pinyin_initials.contains(query) {
-        return 520;
-    }
-    if is_subsequence(&item.pinyin_full, query) || is_subsequence(&item.pinyin_initials, query) {
-        return 280;
-    }
-    0
 }
 
 #[derive(Debug, Clone)]
@@ -299,7 +291,15 @@ mod tests {
             source: "applications".into(),
             launch_count: 1,
             last_launch_time: Some(1),
+            aliases: String::new(),
         }
+    }
+
+    fn app_with(name: &str, aliases: &str, bundle_id: &str) -> Application {
+        let mut item = app(name);
+        item.aliases = aliases.into();
+        item.bundle_id = Some(bundle_id.into());
+        item
     }
 
     #[test]
@@ -332,6 +332,15 @@ mod tests {
         assert!(score_application(&wechat, "wei") > 0);
         let work = app("企业微信");
         assert!(score_application(&work, "qywx") > 0);
+    }
+
+    #[test]
+    fn finds_feishu_by_localized_aliases_and_bundle_id() {
+        let feishu = app_with("Lark", "飞书\nFeishu", "com.bytedance.macos.feishu");
+        assert!(score_application(&feishu, "飞书") > 0);
+        assert!(score_application(&feishu, "feishu") > 0);
+        assert!(score_application(&feishu, "fs") > 0);
+        assert!(score_application(&feishu, "lark") > 0);
     }
 
     #[test]

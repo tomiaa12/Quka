@@ -60,6 +60,7 @@ mod tests {
                 source: "applications".into(),
                 launch_count: 0,
                 last_launch_time: None,
+                aliases: String::new(),
             })
             .unwrap_err();
         assert!(error.to_string().contains("路径不存在"));

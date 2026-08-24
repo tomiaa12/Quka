@@ -111,6 +111,7 @@ pub fn seed_if_empty(conn: &Connection) -> Result<bool, AppError> {
                 source: item.source.into(),
                 launch_count: item.launch_count,
                 last_launch_time: Some(now - item.last_launch_offset_ms),
+                aliases: String::new(),
             },
         )?;
     }

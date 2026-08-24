@@ -2,8 +2,8 @@
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { type ScanResult } from "../services/app";
+import { useI18n } from "../i18n/use-i18n";
 import { getShortcutStatus } from "../services/settings";
-import { themeLabel } from "../services/theme";
 import { hideSearchWindow, isTauri, onWindowFocusChange, resizeSearchWindow } from "../services/window";
 import { useSearchStore } from "../stores/search";
 import { useSettingsStore } from "../stores/settings";
@@ -23,6 +23,7 @@ const BANNER_H = 48;
 
 const search = useSearchStore();
 const settings = useSettingsStore();
+const { t } = useI18n();
 const inputRef = ref<{ focus: () => void } | null>(null);
 
 const emptyVariant = computed(() => {
@@ -33,16 +34,16 @@ const emptyVariant = computed(() => {
 });
 
 const footerHint = computed(() => {
-  if (search.scanning && search.scanner === "windows") return "Windows Scanner";
-  if (search.scanning && search.scanner === "macos") return "macOS Scanner";
-  if (search.scanning) return "Scanner";
-  if (search.loading) return "loading";
-  if (search.results.length === 0 && !search.isEmptyKeyword) return "0 个结果";
+  if (search.scanning && search.scanner === "windows") return t("search.scannerWindows");
+  if (search.scanning && search.scanner === "macos") return t("search.scannerMac");
+  if (search.scanning) return t("search.scanner");
+  if (search.loading) return t("search.loading");
+  if (search.results.length === 0 && !search.isEmptyKeyword) return t("search.noResults");
   if (!search.isEmptyKeyword && search.searchElapsedMs > 0) {
-    return `${search.searchElapsedMs} ms · 搜索 < 20ms`;
+    return t("search.fastMs", { ms: search.searchElapsedMs });
   }
-  if (search.isEmptyKeyword && search.results.length > 0) return "最近使用";
-  return "搜索 < 20ms";
+  if (search.isEmptyKeyword && search.results.length > 0) return t("search.recent");
+  return t("search.fast");
 });
 
 function windowHeight(): number {
@@ -99,14 +100,16 @@ async function cycleShortcut(): Promise<void> {
   try {
     const status = await settings.cycleShortcut();
     if (status.error || !status.registered) {
-      search.error = status.error || "快捷键注册失败";
+      search.error = status.error || t("search.shortcutFailed");
     } else {
       search.error = "";
-      search.notice = `快捷键已改为 ${status.label}`;
+      search.notice = t("search.shortcutChanged", { label: settings.shortcutLabel });
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    search.error = message.includes("快捷键注册失败") ? message : `快捷键注册失败：${message}`;
+    search.error = message.includes("快捷键注册失败") || message.includes("shortcut")
+      ? message
+      : `${t("search.shortcutFailed")}：${message}`;
   }
 }
 
@@ -141,7 +144,7 @@ onMounted(() => {
       const status = await getShortcutStatus();
       if (status.shortcut) settings.globalShortcut = status.shortcut;
       if (!status.registered) {
-        search.error = status.error || "快捷键注册失败";
+        search.error = status.error || t("search.shortcutFailed");
       } else if (status.error) {
         search.error = status.error;
       }
@@ -154,6 +157,7 @@ onMounted(() => {
       unlistenShown = await listen("search-shown", () => {
         armIgnoreBlur();
         focusInput();
+        void settings.load();
       });
       unlistenFocus = await onWindowFocusChange((focused) => {
         if (focused) {
@@ -164,7 +168,7 @@ onMounted(() => {
         hideIfUnfocused();
       });
       unlistenRescan = await listen<ScanResult>("apps-rescanned", (event) => {
-        search.notice = `发现 ${event.payload.applicationCount} 个应用`;
+        search.notice = t("search.foundApps", { n: event.payload.applicationCount });
         void search.search();
       });
       unlistenScanFailed = await listen<string>("scan-failed", (event) => {
@@ -197,6 +201,7 @@ onUnmounted(() => {
     <SearchInput
       ref="inputRef"
       :model-value="search.keyword"
+      :placeholder="t('search.placeholder')"
       @update:model-value="search.setKeyword"
       @keydown="onKeydown"
     />
@@ -216,16 +221,16 @@ onUnmounted(() => {
     <EmptyState v-else :variant="emptyVariant" :scanner="search.scanner" />
     <div class="search-footer">
       <div class="hint-keys">
-        <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
-        <span><kbd>Enter</kbd> 启动</span>
-        <span><kbd>Esc</kbd> 关闭</span>
+        <span><kbd>↑</kbd><kbd>↓</kbd> {{ t("search.select") }}</span>
+        <span><kbd>Enter</kbd> {{ t("search.launch") }}</span>
+        <span><kbd>Esc</kbd> {{ t("search.close") }}</span>
       </div>
       <div class="footer-actions">
-        <button type="button" class="shortcut-chip" :title="'点击切换快捷键'" @click="cycleShortcut">
+        <button type="button" class="shortcut-chip" :title="t('search.changeShortcut')" @click="cycleShortcut">
           {{ settings.shortcutLabel }}
         </button>
         <button type="button" class="theme-toggle" @click="settings.cycleTheme()">
-          {{ themeLabel(settings.theme) }} · {{ footerHint }}
+          {{ settings.themeLabel }} · {{ footerHint }}
         </button>
       </div>
     </div>

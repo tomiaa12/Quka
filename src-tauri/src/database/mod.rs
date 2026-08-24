@@ -30,7 +30,7 @@ pub fn app_db_path(app: &AppHandle) -> Result<PathBuf, AppError> {
 pub fn open(app: &AppHandle) -> Result<AppState, AppError> {
     let path = app_db_path(app)?;
     let conn = Connection::open(&path).map_err(AppError::from)?;
-    migrations::run(&conn)?;
+    let needs_rescan = migrations::run(&conn)?;
     let settings_row = settings::get(&conn)?;
     let just_initialized = if crate::scanner::is_scan_supported() {
         false
@@ -48,5 +48,6 @@ pub fn open(app: &AppHandle) -> Result<AppState, AppError> {
         db: std::sync::Mutex::new(conn),
         index: std::sync::Mutex::new(index),
         just_initialized,
+        needs_rescan: std::sync::atomic::AtomicBool::new(needs_rescan),
     })
 }

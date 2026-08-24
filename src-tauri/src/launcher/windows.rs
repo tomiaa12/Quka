@@ -87,6 +87,7 @@ mod tests {
             source: "system".into(),
             launch_count: 0,
             last_launch_time: None,
+            aliases: String::new(),
         }
     }
 

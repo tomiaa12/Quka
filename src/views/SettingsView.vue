@@ -3,13 +3,14 @@ import { onMounted, onUnmounted, ref } from "vue";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getDatabaseInfo, rescanApplications, type ScanResult } from "../services/app";
 import { checkForUpdate, currentVersion, installUpdate, type AppUpdate } from "../services/update";
+import { useI18n } from "../i18n/use-i18n";
 import { isTauri } from "../services/window";
-import { themeLabel } from "../services/theme";
 import { useSettingsStore } from "../stores/settings";
 
 type SettingsTab = "general" | "search" | "apps";
 
 const settings = useSettingsStore();
+const { t } = useI18n();
 const tab = ref<SettingsTab>("general");
 const appCount = ref(0);
 const scanning = ref(false);
@@ -40,7 +41,7 @@ async function toggleStartup(): Promise<void> {
     const next = !settings.launchAtStartup;
     await settings.setLaunchAtStartup(next);
     error.value = "";
-    message.value = next ? "已开启开机启动" : "已关闭开机启动";
+    message.value = next ? t("settings.startupOn") : t("settings.startupOff");
   } catch (item) {
     error.value = item instanceof Error ? item.message : String(item);
   }
@@ -50,11 +51,11 @@ async function cycleShortcut(): Promise<void> {
   try {
     const status = await settings.cycleShortcut();
     if (status.error || !status.registered) {
-      error.value = status.error || "快捷键注册失败";
+      error.value = status.error || t("search.shortcutFailed");
       return;
     }
     error.value = "";
-    message.value = `快捷键已改为 ${status.label}`;
+    message.value = t("search.shortcutChanged", { label: settings.shortcutLabel });
   } catch (item) {
     error.value = item instanceof Error ? item.message : String(item);
   }
@@ -62,15 +63,19 @@ async function cycleShortcut(): Promise<void> {
 
 async function applyScan(result: ScanResult): Promise<void> {
   appCount.value = result.applicationCount;
-  message.value = `已扫描 ${result.applicationCount} 个应用，新增 ${result.inserted}，更新 ${result.updated}`;
+  message.value = t("settings.scanned", {
+    n: result.applicationCount,
+    inserted: result.inserted,
+    updated: result.updated,
+  });
 }
 
 function updateStatus(): string {
-  if (installingUpdate.value) return "正在下载并安装更新…";
-  if (checkingUpdate.value) return "正在检查更新…";
-  if (updateInfo.value) return `发现新版本 ${updateInfo.value.version}`;
-  if (version.value) return `当前 ${version.value}`;
-  return "检查 GitHub Release";
+  if (installingUpdate.value) return t("settings.installingUpdate");
+  if (checkingUpdate.value) return t("settings.checkingUpdates");
+  if (updateInfo.value) return t("settings.updateFound", { version: updateInfo.value.version });
+  if (version.value) return t("settings.currentVersion", { version: version.value });
+  return t("settings.checkGithub");
 }
 
 async function checkUpdate(silent = false): Promise<void> {
@@ -80,14 +85,14 @@ async function checkUpdate(silent = false): Promise<void> {
     updateInfo.value = next;
     if (!silent) {
       error.value = "";
-      message.value = next ? `发现新版本 ${next.version}` : "已是最新版本";
+      message.value = next ? t("settings.updateFound", { version: next.version }) : t("settings.latest");
     }
   } catch (item) {
     updateInfo.value = null;
     if (!silent) {
       const text = item instanceof Error ? item.message : String(item);
       error.value = text.includes("Could not fetch") || text.includes("error sending request")
-        ? "检查更新失败，请确认已发布 Release"
+        ? t("settings.updateFailed")
         : text;
     }
   } finally {
@@ -144,13 +149,13 @@ onUnmounted(() => {
     <div class="settings-body">
       <nav class="settings-nav">
         <button type="button" class="nav-item" :class="{ 'is-active': tab === 'general' }" @click="setTab('general')">
-          通用
+          {{ t("settings.general") }}
         </button>
         <button type="button" class="nav-item" :class="{ 'is-active': tab === 'search' }" @click="setTab('search')">
-          搜索
+          {{ t("settings.search") }}
         </button>
         <button type="button" class="nav-item" :class="{ 'is-active': tab === 'apps' }" @click="setTab('apps')">
-          应用
+          {{ t("settings.apps") }}
         </button>
       </nav>
       <main class="settings-main">
@@ -158,11 +163,11 @@ onUnmounted(() => {
         <div v-else-if="message" class="banner banner-ok">{{ message }}</div>
 
         <template v-if="tab === 'general'">
-          <h2>通用</h2>
+          <h2>{{ t("settings.general") }}</h2>
           <div class="row">
             <div>
-              <div class="row-title">开机启动</div>
-              <div class="row-desc">登录系统后在后台运行。Windows Startup / macOS Login Item</div>
+              <div class="row-title">{{ t("settings.startup") }}</div>
+              <div class="row-desc">{{ t("settings.startupDesc") }}</div>
             </div>
             <button
               type="button"
@@ -175,23 +180,32 @@ onUnmounted(() => {
           </div>
           <div class="row">
             <div>
-              <div class="row-title">全局快捷键</div>
-              <div class="row-desc">呼出搜索窗口。修改后会注销旧快捷键并重新注册</div>
+              <div class="row-title">{{ t("settings.shortcut") }}</div>
+              <div class="row-desc">{{ t("settings.shortcutDesc") }}</div>
             </div>
             <button type="button" class="shortcut-box" @click="cycleShortcut">{{ settings.shortcutLabel }}</button>
           </div>
           <div class="row">
             <div>
-              <div class="row-title">主题</div>
-              <div class="row-desc">跟随系统，也可固定 Light / Dark</div>
+              <div class="row-title">{{ t("settings.language") }}</div>
+              <div class="row-desc">{{ t("settings.languageDesc") }}</div>
             </div>
-            <button type="button" class="shortcut-box" @click="settings.cycleTheme()">
-              {{ themeLabel(settings.theme) }}
+            <button type="button" class="shortcut-box" @click="settings.cycleLocale()">
+              {{ settings.localeLabel }}
             </button>
           </div>
           <div class="row">
             <div>
-              <div class="row-title">软件更新</div>
+              <div class="row-title">{{ t("settings.theme") }}</div>
+              <div class="row-desc">{{ t("settings.themeDesc") }}</div>
+            </div>
+            <button type="button" class="shortcut-box" @click="settings.cycleTheme()">
+              {{ settings.themeLabel }}
+            </button>
+          </div>
+          <div class="row">
+            <div>
+              <div class="row-title">{{ t("settings.updates") }}</div>
               <div class="row-desc">{{ updateStatus() }}</div>
             </div>
             <button
@@ -201,7 +215,7 @@ onUnmounted(() => {
               :disabled="installingUpdate"
               @click="applyUpdate"
             >
-              {{ installingUpdate ? "更新中…" : "立即更新" }}
+              {{ installingUpdate ? t("settings.updating") : t("settings.updateNow") }}
             </button>
             <button
               v-else
@@ -210,17 +224,17 @@ onUnmounted(() => {
               :disabled="checkingUpdate"
               @click="checkUpdate(false)"
             >
-              {{ checkingUpdate ? "检查中…" : "检查更新" }}
+              {{ checkingUpdate ? t("settings.checking") : t("settings.checkUpdate") }}
             </button>
           </div>
         </template>
 
         <template v-else-if="tab === 'search'">
-          <h2>搜索</h2>
+          <h2>{{ t("settings.search") }}</h2>
           <div class="row">
             <div>
-              <div class="row-title">最大结果数量</div>
-              <div class="row-desc">搜索窗口最多显示 4～12 项，高度随结果变化</div>
+              <div class="row-title">{{ t("settings.maxResults") }}</div>
+              <div class="row-desc">{{ t("settings.maxResultsDesc") }}</div>
             </div>
             <div class="stepper">
               <button type="button" class="btn" @click="settings.setResultLimit(settings.resultLimit - 1)">−</button>
@@ -230,8 +244,8 @@ onUnmounted(() => {
           </div>
           <div class="row">
             <div>
-              <div class="row-title">使用频率排序</div>
-              <div class="row-desc">按启动次数与最近启动时间提升常用应用</div>
+              <div class="row-title">{{ t("settings.usageRanking") }}</div>
+              <div class="row-desc">{{ t("settings.usageRankingDesc") }}</div>
             </div>
             <button
               type="button"
@@ -245,20 +259,20 @@ onUnmounted(() => {
         </template>
 
         <template v-else>
-          <h2>应用</h2>
+          <h2>{{ t("settings.apps") }}</h2>
           <div class="row">
             <div>
-              <div class="row-title">重新扫描</div>
-              <div class="row-desc">增量扫描已安装应用，不删除用户设置</div>
+              <div class="row-title">{{ t("settings.rescan") }}</div>
+              <div class="row-desc">{{ t("settings.rescanDesc") }}</div>
             </div>
             <button type="button" class="btn" :disabled="scanning" @click="rescan">
-              {{ scanning ? "扫描中…" : "重新扫描" }}
+              {{ scanning ? t("settings.rescanning") : t("settings.rescan") }}
             </button>
           </div>
           <div class="row">
             <div>
-              <div class="row-title">本地应用库</div>
-              <div class="row-desc">当前已索引 {{ appCount }} 个应用</div>
+              <div class="row-title">{{ t("settings.library") }}</div>
+              <div class="row-desc">{{ t("settings.libraryDesc", { n: appCount }) }}</div>
             </div>
             <span class="app-meta">SQLite</span>
           </div>

@@ -11,6 +11,21 @@ pub struct Application {
     pub source: String,
     pub launch_count: i64,
     pub last_launch_time: Option<i64>,
+    #[serde(default)]
+    pub aliases: String,
+}
+
+impl Application {
+    pub fn search_names(&self) -> Vec<&str> {
+        std::iter::once(self.name.as_str())
+            .chain(
+                self.aliases
+                    .split('\n')
+                    .map(str::trim)
+                    .filter(|item| !item.is_empty()),
+            )
+            .collect()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -21,6 +36,7 @@ pub struct Settings {
     pub result_limit: i64,
     pub enable_usage_ranking: bool,
     pub theme: String,
+    pub locale: String,
 }
 
 impl Default for Settings {
@@ -35,6 +51,7 @@ impl Default for Settings {
             result_limit: 8,
             enable_usage_ranking: true,
             theme: "system".into(),
+            locale: "system".into(),
         }
     }
 }

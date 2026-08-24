@@ -147,7 +147,12 @@ fn stop_handle(handle: Option<PlatformHandle>) {
 }
 
 fn on_shortcut_toggle(app: &AppHandle) {
-    if let Err(error) = toggle_search_window(app) {
-        log::error!("快捷键呼出窗口失败：{error}");
+    let app = app.clone();
+    if let Err(error) = app.clone().run_on_main_thread(move || {
+        if let Err(error) = toggle_search_window(&app) {
+            log::error!("快捷键呼出窗口失败：{error}");
+        }
+    }) {
+        log::error!("快捷键回调调度失败：{error}");
     }
 }

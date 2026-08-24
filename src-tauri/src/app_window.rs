@@ -3,7 +3,20 @@ use std::sync::Mutex;
 
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition};
 
+use crate::i18n;
 use crate::state::AppError;
+
+fn current_locale(app: &AppHandle) -> String {
+    let Some(state) = app.try_state::<crate::state::AppState>() else {
+        return "system".into();
+    };
+    state
+        .lock_db()
+        .ok()
+        .and_then(|conn| crate::database::settings::get(&conn).ok())
+        .map(|settings| settings.locale)
+        .unwrap_or_else(|| "system".into())
+}
 
 static LAST_MONITOR: Mutex<Option<CachedMonitor>> = Mutex::new(None);
 static IGNORE_UNFOCUS_UNTIL: AtomicI64 = AtomicI64::new(0);
@@ -106,11 +119,12 @@ pub fn show_settings_window(app: &AppHandle) -> Result<(), AppError> {
         window
             .set_focus()
             .map_err(|error| AppError::Shortcut(error.to_string()))?;
+        let _ = window.set_title(i18n::settings_title(&current_locale(app)));
         return Ok(());
     }
 
     tauri::WebviewWindowBuilder::new(app, "settings", tauri::WebviewUrl::App("index.html".into()))
-        .title("Quka 设置")
+        .title(i18n::settings_title(&current_locale(app)))
         .inner_size(760.0, 520.0)
         .resizable(false)
         .decorations(true)
@@ -119,6 +133,12 @@ pub fn show_settings_window(app: &AppHandle) -> Result<(), AppError> {
         .build()
         .map_err(|error| AppError::Shortcut(error.to_string()))?;
     Ok(())
+}
+
+pub fn apply_locale(app: &AppHandle, locale: &str) {
+    if let Some(window) = app.get_webview_window("settings") {
+        let _ = window.set_title(i18n::settings_title(locale));
+    }
 }
 
 fn position_on_cursor_monitor(

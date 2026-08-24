@@ -5,40 +5,21 @@ use tauri::{AppHandle, Emitter, Manager};
 
 use crate::app_window::{show_search_window, show_settings_window};
 use crate::commands::scan::run_rescan;
+use crate::i18n;
 
-pub fn open_label() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "搜索"
-    } else {
-        "打开搜索"
-    }
+const TRAY_ID: &str = "main";
+
+pub fn open_label(locale: &str) -> &'static str {
+    i18n::tray_open(locale)
 }
 
-pub fn rescan_label() -> &'static str {
-    if cfg!(target_os = "macos") {
-        "重新扫描"
-    } else {
-        "重新扫描应用"
-    }
+pub fn rescan_label(locale: &str) -> &'static str {
+    i18n::tray_rescan(locale)
 }
 
-pub fn install(app: &AppHandle) -> Result<(), String> {
-    let title = MenuItem::with_id(app, "title", "Quka", false, None::<&str>)
-        .map_err(|error| error.to_string())?;
-    let open = MenuItem::with_id(app, "open", open_label(), true, None::<&str>)
-        .map_err(|error| error.to_string())?;
-    let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)
-        .map_err(|error| error.to_string())?;
-    let rescan = MenuItem::with_id(app, "rescan", rescan_label(), true, None::<&str>)
-        .map_err(|error| error.to_string())?;
-    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)
-        .map_err(|error| error.to_string())?;
-    let separator = PredefinedMenuItem::separator(app).map_err(|error| error.to_string())?;
-
-    let menu = Menu::with_items(app, &[&title, &open, &settings, &rescan, &separator, &quit])
-        .map_err(|error| error.to_string())?;
-
-    let builder = TrayIconBuilder::new()
+pub fn install(app: &AppHandle, locale: &str) -> Result<(), String> {
+    let menu = build_menu(app, locale)?;
+    let builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         .tooltip("Quka")
         .show_menu_on_left_click(cfg!(target_os = "macos"))
@@ -81,6 +62,32 @@ pub fn install(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+pub fn refresh(app: &AppHandle, locale: &str) -> Result<(), String> {
+    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+        return Ok(());
+    };
+    let menu = build_menu(app, locale)?;
+    tray.set_menu(Some(menu))
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn build_menu(app: &AppHandle, locale: &str) -> Result<Menu<tauri::Wry>, String> {
+    let title = MenuItem::with_id(app, "title", "Quka", false, None::<&str>)
+        .map_err(|error| error.to_string())?;
+    let open = MenuItem::with_id(app, "open", i18n::tray_open(locale), true, None::<&str>)
+        .map_err(|error| error.to_string())?;
+    let settings = MenuItem::with_id(app, "settings", i18n::tray_settings(locale), true, None::<&str>)
+        .map_err(|error| error.to_string())?;
+    let rescan = MenuItem::with_id(app, "rescan", i18n::tray_rescan(locale), true, None::<&str>)
+        .map_err(|error| error.to_string())?;
+    let quit = MenuItem::with_id(app, "quit", i18n::tray_quit(locale), true, None::<&str>)
+        .map_err(|error| error.to_string())?;
+    let separator = PredefinedMenuItem::separator(app).map_err(|error| error.to_string())?;
+    Menu::with_items(app, &[&title, &open, &settings, &rescan, &separator, &quit])
+        .map_err(|error| error.to_string())
+}
+
 fn tray_icon() -> Result<Image<'static>, String> {
     Image::from_bytes(include_bytes!("../icons/32x32.png")).map_err(|error| error.to_string())
 }
@@ -107,11 +114,15 @@ mod tests {
     #[test]
     fn uses_platform_menu_labels() {
         if cfg!(target_os = "macos") {
-            assert_eq!(open_label(), "搜索");
-            assert_eq!(rescan_label(), "重新扫描");
+            assert_eq!(open_label("zh-CN"), "搜索");
+            assert_eq!(rescan_label("zh-CN"), "重新扫描");
+            assert_eq!(open_label("en"), "Search");
+            assert_eq!(rescan_label("en"), "Rescan");
         } else {
-            assert_eq!(open_label(), "打开搜索");
-            assert_eq!(rescan_label(), "重新扫描应用");
+            assert_eq!(open_label("zh-CN"), "打开搜索");
+            assert_eq!(rescan_label("zh-CN"), "重新扫描应用");
+            assert_eq!(open_label("en"), "Open Search");
+            assert_eq!(rescan_label("en"), "Rescan Apps");
         }
     }
 }

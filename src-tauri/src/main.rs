@@ -5,6 +5,7 @@ mod app_window;
 mod autostart;
 mod commands;
 mod database;
+mod i18n;
 mod icon;
 mod launcher;
 mod scanner;
@@ -36,6 +37,8 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             let state = database::open(app.handle()).map_err(|error| error.to_string())?;
             let settings = {
                 let conn = state.lock_db().map_err(|error| error.to_string())?;
@@ -49,7 +52,7 @@ fn main() {
             if let Err(error) = autostart::sync(settings.launch_at_startup) {
                 log::error!("{error}");
             }
-            if let Err(error) = tray::install(app.handle()) {
+            if let Err(error) = tray::install(app.handle(), &settings.locale) {
                 log::error!("系统托盘创建失败：{error}");
             }
             if let Some(window) = app.get_webview_window("main") {
@@ -91,8 +94,15 @@ fn main() {
             unregister_global_shortcut,
             change_global_shortcut,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Quka");
+        .build(tauri::generate_context!())
+        .expect("error while building Quka")
+        .run(|_app, event| {
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = event {
+                if code.is_none() {
+                    api.prevent_exit();
+                }
+            }
+        });
 }
 
 #[cfg(test)]

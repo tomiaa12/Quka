@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { t } from "../i18n";
 import type { SettingsState } from "../types/settings";
 import { isTauri } from "./window";
 
@@ -11,11 +12,11 @@ export interface ShortcutStatus {
 
 export function shortcutLabel(value: string): string {
   const key = value.trim().toLowerCase().replace(/\s+/g, "");
-  if (key === "doublealt" || key === "双击alt") return "双击 Alt";
+  if (key === "doublealt" || key === "双击alt") return t("shortcut.alt");
   if (key === "doublecommand" || key === "doublewin" || key === "双击command" || key === "双击win") {
-    return navigator.userAgent.includes("Mac") ? "双击 Command" : "双击 Win";
+    return navigator.userAgent.includes("Mac") ? t("shortcut.command") : t("shortcut.win");
   }
-  return "双击 Ctrl";
+  return t("shortcut.ctrl");
 }
 
 export function nextShortcut(value: string): string {
@@ -37,7 +38,7 @@ export async function updateSettings(settings: SettingsState): Promise<void> {
 
 export async function getShortcutStatus(): Promise<ShortcutStatus> {
   if (!isTauri()) {
-    return { shortcut: "DoubleCtrl", label: "双击 Ctrl", registered: false, error: "" };
+    return { shortcut: "DoubleCtrl", label: shortcutLabel("DoubleCtrl"), registered: false, error: "" };
   }
   return invoke("get_shortcut_status");
 }

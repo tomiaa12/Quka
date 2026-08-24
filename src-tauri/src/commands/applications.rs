@@ -55,7 +55,8 @@ pub fn get_database_info(state: State<AppState>) -> Result<DatabaseInfo, String>
     Ok(DatabaseInfo {
         application_count,
         just_initialized: state.just_initialized,
-        needs_scan: application_count == 0 && crate::scanner::is_scan_supported(),
+        needs_scan: crate::scanner::is_scan_supported()
+            && (application_count == 0 || state.take_needs_rescan()),
         scanner: crate::scanner::current_scanner_name().into(),
     })
 }

@@ -1,4 +1,5 @@
 import { defineStore } from "pinia";
+import { applyLocale, localeLabel, nextLocale } from "../i18n";
 import {
   changeGlobalShortcut,
   getSettings,
@@ -6,8 +7,13 @@ import {
   shortcutLabel,
   updateSettings,
 } from "../services/settings";
-import { applyTheme, nextTheme } from "../services/theme";
-import type { SettingsState, ThemeMode } from "../types/settings";
+import { applyTheme, nextTheme, themeLabel } from "../services/theme";
+import type { LocaleMode, SettingsState, ThemeMode } from "../types/settings";
+
+function asLocale(value: unknown): LocaleMode {
+  if (value === "zh-CN" || value === "en" || value === "system") return value;
+  return "system";
+}
 
 const defaultSettings: SettingsState = {
   globalShortcut: "DoubleCtrl",
@@ -15,6 +21,7 @@ const defaultSettings: SettingsState = {
   resultLimit: 8,
   enableUsageRanking: true,
   theme: "system",
+  locale: "system",
 };
 
 function snapshot(state: SettingsState): SettingsState {
@@ -24,26 +31,44 @@ function snapshot(state: SettingsState): SettingsState {
     resultLimit: state.resultLimit,
     enableUsageRanking: state.enableUsageRanking,
     theme: state.theme,
+    locale: state.locale,
   };
 }
 
 export const useSettingsStore = defineStore("settings", {
   state: (): SettingsState => ({ ...defaultSettings }),
   getters: {
-    shortcutLabel: (state) => shortcutLabel(state.globalShortcut),
+    shortcutLabel: (state) => {
+      void state.locale;
+      return shortcutLabel(state.globalShortcut);
+    },
+    themeLabel: (state) => {
+      void state.locale;
+      return themeLabel(state.theme);
+    },
+    localeLabel: (state) => localeLabel(state.locale),
   },
   actions: {
+    hydrate(remote: SettingsState) {
+      this.globalShortcut = remote.globalShortcut;
+      this.launchAtStartup = remote.launchAtStartup;
+      this.resultLimit = remote.resultLimit;
+      this.enableUsageRanking = remote.enableUsageRanking;
+      this.theme = remote.theme;
+      this.locale = asLocale(remote.locale);
+      applyTheme(this.theme);
+      applyLocale(this.locale);
+    },
     async load() {
       try {
         const remote = await getSettings();
-        if (!remote) return;
-        this.globalShortcut = remote.globalShortcut;
-        this.launchAtStartup = remote.launchAtStartup;
-        this.resultLimit = remote.resultLimit;
-        this.enableUsageRanking = remote.enableUsageRanking;
-        this.theme = remote.theme;
-        applyTheme(this.theme);
+        if (!remote) {
+          applyLocale(this.locale);
+          return;
+        }
+        this.hydrate(remote);
       } catch (error) {
+        applyLocale(this.locale);
         console.error(error);
       }
     },
@@ -61,6 +86,14 @@ export const useSettingsStore = defineStore("settings", {
     },
     async cycleTheme() {
       await this.setTheme(nextTheme(this.theme));
+    },
+    async setLocale(locale: LocaleMode) {
+      this.locale = locale;
+      applyLocale(locale);
+      await this.persist();
+    },
+    async cycleLocale() {
+      await this.setLocale(nextLocale(this.locale));
     },
     async cycleShortcut() {
       const status = await changeGlobalShortcut(nextShortcut(this.globalShortcut));

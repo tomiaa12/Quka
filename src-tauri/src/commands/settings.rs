@@ -1,4 +1,4 @@
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::database::models::Settings;
 use crate::database::settings::{get, upsert};
@@ -34,5 +34,12 @@ pub fn update_settings(
     if previous.launch_at_startup != settings.launch_at_startup {
         crate::autostart::apply(settings.launch_at_startup).map_err(AppError::from)?;
     }
+    if previous.locale != settings.locale {
+        crate::app_window::apply_locale(&app, &settings.locale);
+        if let Err(error) = crate::tray::refresh(&app, &settings.locale) {
+            log::error!("托盘语言更新失败：{error}");
+        }
+    }
+    let _ = app.emit("settings-updated", &settings);
     Ok(())
 }

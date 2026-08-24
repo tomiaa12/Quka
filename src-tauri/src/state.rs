@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use rusqlite::Connection;
@@ -43,6 +44,7 @@ pub struct AppState {
     pub db: Mutex<Connection>,
     pub index: Mutex<SearchIndex>,
     pub just_initialized: bool,
+    pub needs_rescan: AtomicBool,
 }
 
 impl AppState {
@@ -66,5 +68,13 @@ impl AppState {
         let mut index = self.lock_index()?;
         *index = SearchIndex::build(apps, settings.result_limit, settings.enable_usage_ranking);
         Ok(())
+    }
+
+    pub fn take_needs_rescan(&self) -> bool {
+        self.needs_rescan.load(Ordering::Relaxed)
+    }
+
+    pub fn clear_needs_rescan(&self) {
+        self.needs_rescan.store(false, Ordering::Relaxed);
     }
 }
