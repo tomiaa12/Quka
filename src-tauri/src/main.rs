@@ -58,6 +58,7 @@ fn main() {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.hide();
             }
+            app_window::watch_foreign_activation(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {

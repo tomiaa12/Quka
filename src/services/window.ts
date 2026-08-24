@@ -29,3 +29,12 @@ export async function onWindowFocusChange(
   if (!isTauri()) return () => undefined;
   return getCurrentWindow().onFocusChanged(({ payload }) => handler(payload));
 }
+
+export async function isSearchWindowFocused(): Promise<boolean> {
+  if (!isTauri()) return document.hasFocus();
+  try {
+    return await getCurrentWindow().isFocused();
+  } catch {
+    return document.hasFocus();
+  }
+}

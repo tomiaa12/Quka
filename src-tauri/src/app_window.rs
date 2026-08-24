@@ -141,6 +141,13 @@ pub fn apply_locale(app: &AppHandle, locale: &str) {
     }
 }
 
+pub fn watch_foreign_activation(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    macos::watch_foreign_activation(app);
+    #[cfg(not(target_os = "macos"))]
+    let _ = app;
+}
+
 fn position_on_cursor_monitor(
     app: &AppHandle,
     window: &tauri::WebviewWindow,
@@ -203,4 +210,39 @@ fn apply_position(window: &tauri::WebviewWindow, monitor: CachedMonitor) -> Resu
         .set_position(PhysicalPosition::new(x, y))
         .map_err(|error| AppError::Shortcut(error.to_string()))?;
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use std::ptr::NonNull;
+
+    use block2::RcBlock;
+    use objc2_app_kit::{NSWorkspace, NSWorkspaceDidActivateApplicationNotification};
+    use objc2_foundation::NSNotification;
+    use tauri::AppHandle;
+
+    use super::{hide_search_window, should_hide_on_unfocus};
+
+    pub fn watch_foreign_activation(app: &AppHandle) {
+        let app = app.clone();
+        let observer = unsafe {
+            let workspace = NSWorkspace::sharedWorkspace();
+            let center = workspace.notificationCenter();
+            let block = RcBlock::new(move |_notification: NonNull<NSNotification>| {
+                if !should_hide_on_unfocus() {
+                    return;
+                }
+                if let Err(error) = hide_search_window(&app) {
+                    log::debug!("其他应用激活后隐藏搜索窗失败：{error}");
+                }
+            });
+            center.addObserverForName_object_queue_usingBlock(
+                Some(NSWorkspaceDidActivateApplicationNotification),
+                None,
+                None,
+                &block,
+            )
+        };
+        std::mem::forget(observer);
+    }
 }

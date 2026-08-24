@@ -4,7 +4,13 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { type ScanResult } from "../services/app";
 import { useI18n } from "../i18n/use-i18n";
 import { getShortcutStatus } from "../services/settings";
-import { hideSearchWindow, isTauri, onWindowFocusChange, resizeSearchWindow } from "../services/window";
+import {
+  hideSearchWindow,
+  isSearchWindowFocused,
+  isTauri,
+  onWindowFocusChange,
+  resizeSearchWindow,
+} from "../services/window";
 import { useSearchStore } from "../stores/search";
 import { useSettingsStore } from "../stores/settings";
 import AppList from "./AppList.vue";
@@ -117,7 +123,9 @@ let unlistenShown: UnlistenFn | undefined;
 let unlistenFocus: UnlistenFn | undefined;
 let unlistenRescan: UnlistenFn | undefined;
 let unlistenScanFailed: UnlistenFn | undefined;
+let focusWatch = 0;
 let ignoreBlurUntil = 0;
+let expectingVisible = false;
 
 function armIgnoreBlur(): void {
   ignoreBlurUntil = Date.now() + 400;
@@ -125,15 +133,28 @@ function armIgnoreBlur(): void {
 
 function hideIfUnfocused(): void {
   if (Date.now() < ignoreBlurUntil) return;
+  expectingVisible = false;
   search.clear();
   void hideSearchWindow();
 }
 
 function hideIfWindowLostFocus(): void {
   window.setTimeout(() => {
-    if (document.hasFocus()) return;
-    hideIfUnfocused();
+    void (async () => {
+      if (Date.now() < ignoreBlurUntil) return;
+      if (document.hasFocus() && (await isSearchWindowFocused())) return;
+      hideIfUnfocused();
+    })();
   }, 0);
+}
+
+function startFocusWatch(): void {
+  expectingVisible = true;
+  window.clearInterval(focusWatch);
+  focusWatch = window.setInterval(() => {
+    if (!expectingVisible) return;
+    hideIfWindowLostFocus();
+  }, 200);
 }
 
 onMounted(() => {
@@ -154,13 +175,16 @@ onMounted(() => {
     armIgnoreBlur();
     focusInput();
     if (isTauri()) {
+      startFocusWatch();
       unlistenShown = await listen("search-shown", () => {
         armIgnoreBlur();
         focusInput();
+        startFocusWatch();
         void settings.load();
       });
       unlistenFocus = await onWindowFocusChange((focused) => {
         if (focused) {
+          expectingVisible = true;
           armIgnoreBlur();
           focusInput();
           return;
@@ -189,6 +213,7 @@ onUnmounted(() => {
   media.removeEventListener("change", onSchemeChange);
   window.removeEventListener("focus", focusInput);
   window.removeEventListener("blur", hideIfWindowLostFocus);
+  window.clearInterval(focusWatch);
   void unlistenShown?.();
   void unlistenFocus?.();
   void unlistenRescan?.();
