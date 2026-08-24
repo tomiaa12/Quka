@@ -2,6 +2,7 @@
 import { onMounted, onUnmounted, ref } from "vue";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { getDatabaseInfo, rescanApplications, type ScanResult } from "../services/app";
+import { getShortcutStatus } from "../services/settings";
 import { checkForUpdate, currentVersion, installUpdate, type AppUpdate } from "../services/update";
 import { useI18n } from "../i18n/use-i18n";
 import { isTauri } from "../services/window";
@@ -131,6 +132,9 @@ onMounted(() => {
     version.value = value;
   });
   if (!isTauri()) return;
+  void getShortcutStatus().then((status) => {
+    if (status.error) error.value = status.error;
+  });
   void checkUpdate(true);
   void listen<ScanResult>("apps-rescanned", (event) => {
     void applyScan(event.payload);

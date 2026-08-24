@@ -48,6 +48,11 @@ impl ShortcutState {
         }
     }
 
+    pub fn clear_error(&self) {
+        let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        inner.last_error.clear();
+    }
+
     pub fn status(&self) -> ShortcutStatus {
         let inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
         ShortcutStatus {
@@ -69,7 +74,7 @@ pub fn unregister(app: &AppHandle) -> Result<ShortcutStatus, AppError> {
         .inner
         .lock()
         .map_err(|error| AppError::Shortcut(error.to_string()))?;
-    stop_handle(inner.handle.take());
+    stop_handle(app, inner.handle.take());
     inner.registered = false;
     inner.last_error = String::new();
     log::info!("快捷键已注销");
@@ -89,7 +94,7 @@ pub fn change(app: &AppHandle, shortcut: &str) -> Result<ShortcutStatus, AppErro
         .inner
         .lock()
         .map_err(|error| AppError::Shortcut(error.to_string()))?;
-    stop_handle(inner.handle.take());
+    stop_handle(app, inner.handle.take());
     inner.current = normalized.clone();
 
     let app_handle = app.clone();
@@ -98,18 +103,19 @@ pub fn change(app: &AppHandle, shortcut: &str) -> Result<ShortcutStatus, AppErro
             let app_handle = app_handle.clone();
             move || on_shortcut_toggle(&app_handle)
         })
-        .map(PlatformHandle::Windows)
+        .map(|handle| (PlatformHandle::Windows(handle), None))
     } else if macos::is_supported() {
-        macos::start(kind, move || on_shortcut_toggle(&app_handle)).map(PlatformHandle::MacOs)
+        macos::start(app, kind, move || on_shortcut_toggle(&app_handle))
+            .map(|(handle, warning)| (PlatformHandle::MacOs(handle), warning))
     } else {
         Err(AppError::Shortcut("当前平台暂不支持全局快捷键".into()))
     };
 
     match started {
-        Ok(handle) => {
+        Ok((handle, warning)) => {
             inner.handle = Some(handle);
             inner.registered = true;
-            inner.last_error = String::new();
+            inner.last_error = warning.unwrap_or_default();
             log::info!("快捷键已注册：{}", shortcut_label(&normalized));
         }
         Err(error) => {
@@ -138,10 +144,10 @@ fn wrap_register_error(error: AppError) -> AppError {
     }
 }
 
-fn stop_handle(handle: Option<PlatformHandle>) {
+fn stop_handle(app: &AppHandle, handle: Option<PlatformHandle>) {
     match handle {
         Some(PlatformHandle::Windows(handle)) => windows::stop(handle),
-        Some(PlatformHandle::MacOs(handle)) => macos::stop(handle),
+        Some(PlatformHandle::MacOs(handle)) => macos::stop(app, handle),
         None => {}
     }
 }
