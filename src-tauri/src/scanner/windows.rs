@@ -138,7 +138,16 @@ pub fn is_supported() -> bool {
     cfg!(target_os = "windows")
 }
 
-fn default_start_menu_dirs() -> Vec<PathBuf> {
+pub fn watch_directories() -> Vec<(PathBuf, bool)> {
+    default_start_menu_dirs()
+        .into_iter()
+        .chain(default_desktop_dirs())
+        .map(|path| (path, true))
+        .chain(default_program_dirs().into_iter().map(|path| (path, true)))
+        .collect()
+}
+
+pub(crate) fn default_start_menu_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Ok(appdata) = std::env::var("APPDATA") {
         dirs.push(
@@ -161,7 +170,7 @@ fn default_start_menu_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-fn default_program_dirs() -> Vec<PathBuf> {
+pub(crate) fn default_program_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Ok(program_files) = std::env::var("ProgramW6432") {
         dirs.push(PathBuf::from(program_files));
@@ -179,7 +188,7 @@ fn default_program_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-fn default_desktop_dirs() -> Vec<PathBuf> {
+pub(crate) fn default_desktop_dirs() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Ok(user) = std::env::var("USERPROFILE") {
         dirs.push(PathBuf::from(user).join("Desktop"));
@@ -427,7 +436,7 @@ fn dedup_by_target(apps: Vec<Application>) -> Vec<Application> {
 mod tests {
     use super::{
         collect_files, dedup_by_target, is_skipped_dir, is_skipped_exe, is_skipped_shortcut_name,
-        pick_main_exes, source_for_program, WindowsScanner,
+        pick_main_exes, source_for_program, watch_directories, WindowsScanner,
     };
     use crate::database::models::Application;
     use crate::scanner::ApplicationScanner;
@@ -474,9 +483,9 @@ mod tests {
 
     #[test]
     fn skips_internal_directories() {
-        assert!(is_skipped_dir(Path::new(r"C:\Program Files\App\uninstall")));
-        assert!(is_skipped_dir(Path::new(r"C:\Program Files\WindowsApps")));
-        assert!(!is_skipped_dir(Path::new(r"C:\Program Files\Google")));
+        assert!(is_skipped_dir(&Path::new("App").join("uninstall")));
+        assert!(is_skipped_dir(&Path::new("Program Files").join("WindowsApps")));
+        assert!(!is_skipped_dir(&Path::new("Program Files").join("Google")));
     }
 
     #[test]
@@ -558,6 +567,20 @@ mod tests {
             source_for_program(Path::new(r"C:\Program Files\App\app.exe")),
             "program-files"
         );
+    }
+
+    #[test]
+    fn watch_covers_start_menu_and_program_files() {
+        let dirs = watch_directories();
+        assert!(dirs.iter().all(|(_, recursive)| *recursive));
+        if cfg!(target_os = "windows") {
+            assert!(
+                dirs.iter().any(|(path, _)| path
+                    .to_string_lossy()
+                    .contains("Start Menu")),
+                "missing Start Menu watch: {dirs:?}"
+            );
+        }
     }
 
     #[test]

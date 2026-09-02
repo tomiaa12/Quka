@@ -97,6 +97,7 @@ pub fn show_search_window(app: &AppHandle) -> Result<(), AppError> {
     window
         .emit("search-shown", ())
         .map_err(|error| AppError::Shortcut(error.to_string()))?;
+    crate::commands::scan::nudge_rescan(app);
     let elapsed = started.elapsed().as_millis();
     if elapsed >= 100 {
         log::warn!("窗口显示 {elapsed}ms");

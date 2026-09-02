@@ -19,6 +19,7 @@ export interface ScanResult {
   deleted: number;
   supported: boolean;
   scanner: ScannerName;
+  silent?: boolean;
 }
 
 export async function getApplications(): Promise<Application[]> {

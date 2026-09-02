@@ -137,7 +137,10 @@ onMounted(() => {
   });
   void checkUpdate(true);
   void listen<ScanResult>("apps-rescanned", (event) => {
-    void applyScan(event.payload);
+    appCount.value = event.payload.applicationCount;
+    if (!event.payload.silent) {
+      void applyScan(event.payload);
+    }
   }).then((unlisten) => {
     unlistenRescan = unlisten;
   });

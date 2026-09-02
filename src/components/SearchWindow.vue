@@ -192,7 +192,9 @@ onMounted(() => {
         hideIfUnfocused();
       });
       unlistenRescan = await listen<ScanResult>("apps-rescanned", (event) => {
-        search.notice = t("search.foundApps", { n: event.payload.applicationCount });
+        if (!event.payload.silent) {
+          search.notice = t("search.foundApps", { n: event.payload.applicationCount });
+        }
         void search.search();
       });
       unlistenScanFailed = await listen<string>("scan-failed", (event) => {

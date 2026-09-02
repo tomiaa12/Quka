@@ -37,11 +37,7 @@ impl MacOsScanner {
     }
 
     pub fn default_directories(&self) -> Vec<PathBuf> {
-        vec![
-            PathBuf::from("/Applications"),
-            self.home_dir.join("Applications"),
-            PathBuf::from("/System/Applications"),
-        ]
+        standard_directories(&self.home_dir)
     }
 
     pub fn scan_directories(&self, directories: &[PathBuf]) -> Result<Vec<Application>, AppError> {
@@ -70,6 +66,21 @@ impl ApplicationScanner for MacOsScanner {
 
 pub fn is_supported() -> bool {
     cfg!(target_os = "macos")
+}
+
+pub fn standard_directories(home_dir: &Path) -> Vec<PathBuf> {
+    vec![
+        PathBuf::from("/Applications"),
+        home_dir.join("Applications"),
+        PathBuf::from("/System/Applications"),
+    ]
+}
+
+pub fn watch_directories(home_dir: &Path) -> Vec<(PathBuf, bool)> {
+    vec![
+        (PathBuf::from("/Applications"), true),
+        (home_dir.join("Applications"), true),
+    ]
 }
 
 fn collect_app_bundles(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -155,7 +166,13 @@ fn read_application(app_path: &Path, icon_dir: &Path, home_dir: &Path) -> Result
 
 fn read_localized_names(app_path: &Path) -> Vec<(String, String)> {
     let resources = app_path.join("Contents").join("Resources");
-    let Ok(entries) = fs::read_dir(&resources) else {
+    let mut names = read_lproj_names(&resources);
+    names.extend(read_loctable_names(&resources.join("InfoPlist.loctable")));
+    names
+}
+
+fn read_lproj_names(resources: &Path) -> Vec<(String, String)> {
+    let Ok(entries) = fs::read_dir(resources) else {
         return Vec::new();
     };
     let mut names = Vec::new();
@@ -172,6 +189,31 @@ fn read_localized_names(app_path: &Path) -> Vec<(String, String)> {
         };
         if let Some(name) = non_empty(&info.display_name).or_else(|| non_empty(&info.name)) {
             names.push((locale.to_string(), name));
+        }
+    }
+    names
+}
+
+fn read_loctable_names(path: &Path) -> Vec<(String, String)> {
+    let Ok(plist::Value::Dictionary(root)) = plist::Value::from_file(path) else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    for (locale, value) in root {
+        if locale.eq_ignore_ascii_case("LocProvenance") {
+            continue;
+        }
+        let Some(dict) = value.as_dictionary() else {
+            continue;
+        };
+        let name = dict
+            .get("CFBundleDisplayName")
+            .and_then(plist::Value::as_string)
+            .or_else(|| dict.get("CFBundleName").and_then(plist::Value::as_string))
+            .map(str::trim)
+            .filter(|text| !text.is_empty());
+        if let Some(name) = name {
+            names.push((locale, name.to_string()));
         }
     }
     names
@@ -413,7 +455,7 @@ fn dedup_applications(apps: Vec<Application>) -> Vec<Application> {
 mod tests {
     use super::{
         collect_app_bundles, dedup_applications, is_app_bundle, parse_strings, read_application,
-        source_for_path, MacOsScanner,
+        source_for_path, watch_directories, MacOsScanner,
     };
     use crate::database::models::Application;
     use crate::scanner::ApplicationScanner;
@@ -456,6 +498,16 @@ mod tests {
         )
         .unwrap();
         app
+    }
+
+    #[test]
+    fn watch_skips_system_applications() {
+        let dirs = watch_directories(Path::new("/Users/ada"));
+        let paths: Vec<_> = dirs.iter().map(|(path, _)| path.clone()).collect();
+        assert!(paths.contains(&PathBuf::from("/Applications")));
+        assert!(paths.contains(&PathBuf::from("/Users/ada/Applications")));
+        assert!(!paths.contains(&PathBuf::from("/System/Applications")));
+        assert!(dirs.iter().all(|(_, recursive)| *recursive));
     }
 
     #[test]
@@ -614,6 +666,42 @@ CFBundleDisplayName = "飞书";
         .unwrap();
     }
 
+    fn write_loctable(app: &Path, locales: &[(&str, &str)]) {
+        let resources = app.join("Contents").join("Resources");
+        fs::create_dir_all(&resources).unwrap();
+        let mut locale_entries = String::new();
+        for (locale, display) in locales {
+            locale_entries.push_str(&format!(
+                r#"  <key>{locale}</key>
+  <dict>
+    <key>CFBundleDisplayName</key>
+    <string>{display}</string>
+    <key>CFBundleName</key>
+    <string>{display}</string>
+  </dict>
+"#
+            ));
+        }
+        fs::write(
+            resources.join("InfoPlist.loctable"),
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+{locale_entries}  <key>LocProvenance</key>
+  <dict>
+    <key>en</key>
+    <dict/>
+  </dict>
+</dict>
+</plist>
+"#
+            ),
+        )
+        .unwrap();
+    }
+
     #[test]
     fn indexes_localized_feishu_aliases() {
         let root = temp_dir("feishu");
@@ -633,6 +721,47 @@ CFBundleDisplayName = "飞书";
         assert!(crate::database::search::score_application(&scanned, "feishu") > 0);
         assert!(crate::database::search::score_application(&scanned, "fs") > 0);
         assert!(crate::database::search::score_application(&scanned, "lark") > 0);
+    }
+
+    #[test]
+    fn indexes_loctable_localized_aliases() {
+        let root = temp_dir("loctable");
+        let app = write_app(
+            &root,
+            "Terminal.app",
+            "Terminal",
+            "Terminal",
+            "com.apple.Terminal",
+        );
+        write_loctable(&app, &[("en", "Terminal"), ("zh_CN", "终端"), ("zh_TW", "終端機")]);
+        let icon_dir = root.join("icons");
+        let scanned = read_application(&app, &icon_dir, &root.join("home")).unwrap();
+        let names = scanned.search_names();
+        assert!(
+            names.iter().any(|name| *name == "终端"),
+            "loctable zh_CN name missing: {names:?}"
+        );
+        assert!(names.iter().any(|name| *name == "終端機"));
+        assert!(crate::database::search::score_application(&scanned, "终端") > 0);
+        assert!(crate::database::search::score_application(&scanned, "終端機") > 0);
+        assert!(crate::database::search::score_application(&scanned, "terminal") > 0);
+    }
+
+    #[test]
+    fn reads_installed_terminal_loctable_if_present() {
+        let app = PathBuf::from("/System/Applications/Utilities/Terminal.app");
+        if !app.is_dir() {
+            return;
+        }
+        let root = temp_dir("real-terminal");
+        let scanned = read_application(&app, &root.join("icons"), &root.join("home")).unwrap();
+        let names = scanned.search_names();
+        assert!(
+            names.iter().any(|name| *name == "终端"),
+            "expected 终端 in {names:?}"
+        );
+        assert!(crate::database::search::score_application(&scanned, "终端") > 0);
+        assert!(crate::database::search::score_application(&scanned, "terminal") > 0);
     }
 
     #[test]

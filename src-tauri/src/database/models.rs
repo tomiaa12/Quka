@@ -74,4 +74,6 @@ pub struct ScanResult {
     pub deleted: i64,
     pub supported: bool,
     pub scanner: String,
+    #[serde(default)]
+    pub silent: bool,
 }

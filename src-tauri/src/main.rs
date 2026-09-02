@@ -59,6 +59,10 @@ fn main() {
                 let _ = window.hide();
             }
             app_window::watch_foreign_activation(app.handle());
+            crate::scanner::watch::start(app.handle(), {
+                let handle = app.handle().clone();
+                move || crate::commands::scan::request_auto_rescan(&handle)
+            });
             Ok(())
         })
         .on_window_event(|window, event| {

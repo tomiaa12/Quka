@@ -1,5 +1,6 @@
 pub mod macos;
 pub mod sync;
+pub mod watch;
 pub mod windows;
 
 use crate::database::models::Application;
