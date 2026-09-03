@@ -8,6 +8,12 @@ export type AppUpdate = {
   downloadAndInstall: () => Promise<void>;
 };
 
+export type UpdateProgress = {
+  downloaded: number;
+  total: number;
+  percent: number;
+};
+
 let pending: Update | null = null;
 
 export async function currentVersion(): Promise<string> {
@@ -32,8 +38,29 @@ export async function checkForUpdate(): Promise<AppUpdate | null> {
   }
 }
 
-export async function installUpdate(update: AppUpdate): Promise<void> {
+export async function installUpdate(
+  update: AppUpdate,
+  onProgress?: (progress: UpdateProgress) => void,
+): Promise<void> {
   const target = pending ?? update;
-  await target.downloadAndInstall();
+  let downloaded = 0;
+  let total = 0;
+  await target.downloadAndInstall((event) => {
+    if (event.event === "Started") {
+      total = event.data.contentLength ?? 0;
+      downloaded = 0;
+      onProgress?.({ downloaded, total, percent: 0 });
+      return;
+    }
+    if (event.event === "Progress") {
+      downloaded += event.data.chunkLength;
+      const percent = total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : 0;
+      onProgress?.({ downloaded, total, percent });
+      return;
+    }
+    if (event.event === "Finished") {
+      onProgress?.({ downloaded: total || downloaded, total, percent: total > 0 ? 100 : 0 });
+    }
+  });
   await relaunch();
 }

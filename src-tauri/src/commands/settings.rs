@@ -40,6 +40,11 @@ pub fn update_settings(
             log::error!("托盘语言更新失败：{error}");
         }
     }
+    if previous.tray_icon != settings.tray_icon {
+        if let Err(error) = crate::tray::apply_icon(&app, &settings.tray_icon) {
+            log::error!("托盘图标更新失败：{error}");
+        }
+    }
     let _ = app.emit("settings-updated", &settings);
     Ok(())
 }

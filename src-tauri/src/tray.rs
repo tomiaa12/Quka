@@ -17,11 +17,13 @@ pub fn rescan_label(locale: &str) -> &'static str {
     i18n::tray_rescan(locale)
 }
 
-pub fn install(app: &AppHandle, locale: &str) -> Result<(), String> {
+pub fn install(app: &AppHandle, locale: &str, tray_icon: &str) -> Result<(), String> {
+    let style = crate::database::settings::normalize_tray_icon(tray_icon);
     let menu = build_menu(app, locale)?;
     let builder = TrayIconBuilder::with_id(TRAY_ID)
         .menu(&menu)
         .tooltip("Quka")
+        .icon_as_template(is_template(&style))
         .show_menu_on_left_click(cfg!(target_os = "macos"))
         .on_menu_event(|app, event| match event.id.as_ref() {
             "open" => {
@@ -55,7 +57,7 @@ pub fn install(app: &AppHandle, locale: &str) -> Result<(), String> {
         });
 
     builder
-        .icon(tray_icon()?)
+        .icon(tray_image(&style)?)
         .build(app)
         .map_err(|error| error.to_string())?;
     log::info!("系统托盘已就绪");
@@ -72,6 +74,30 @@ pub fn refresh(app: &AppHandle, locale: &str) -> Result<(), String> {
     Ok(())
 }
 
+pub fn apply_icon(app: &AppHandle, tray_icon: &str) -> Result<(), String> {
+    let Some(tray) = app.tray_by_id(TRAY_ID) else {
+        return Ok(());
+    };
+    let style = crate::database::settings::normalize_tray_icon(tray_icon);
+    tray.set_icon_with_as_template(Some(tray_image(&style)?), is_template(&style))
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+fn is_template(style: &str) -> bool {
+    style != "color"
+}
+
+fn tray_image(style: &str) -> Result<Image<'static>, String> {
+    let bytes: &[u8] = match style {
+        "mono" => include_bytes!("../icons/tray/mono-64.png"),
+        "search" => include_bytes!("../icons/tray/search-64.png"),
+        "bolt" => include_bytes!("../icons/tray/bolt-64.png"),
+        _ => include_bytes!("../icons/64x64.png"),
+    };
+    Image::from_bytes(bytes).map_err(|error| error.to_string())
+}
+
 fn build_menu(app: &AppHandle, locale: &str) -> Result<Menu<tauri::Wry>, String> {
     let title = MenuItem::with_id(app, "title", "Quka", false, None::<&str>)
         .map_err(|error| error.to_string())?;
@@ -86,10 +112,6 @@ fn build_menu(app: &AppHandle, locale: &str) -> Result<Menu<tauri::Wry>, String>
     let separator = PredefinedMenuItem::separator(app).map_err(|error| error.to_string())?;
     Menu::with_items(app, &[&title, &open, &settings, &rescan, &separator, &quit])
         .map_err(|error| error.to_string())
-}
-
-fn tray_icon() -> Result<Image<'static>, String> {
-    Image::from_bytes(include_bytes!("../icons/32x32.png")).map_err(|error| error.to_string())
 }
 
 fn start_rescan(app: &AppHandle) {

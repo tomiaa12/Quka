@@ -7,6 +7,17 @@ import { checkForUpdate, currentVersion, installUpdate, type AppUpdate } from ".
 import { useI18n } from "../i18n/use-i18n";
 import { isTauri } from "../services/window";
 import { useSettingsStore } from "../stores/settings";
+import type { TrayIconStyle } from "../types/settings";
+import colorIcon from "../assets/tray-color.png";
+
+const trayIcons: TrayIconStyle[] = ["color", "mono", "search", "bolt"];
+
+function trayIconLabel(style: TrayIconStyle): string {
+  if (style === "mono") return t("trayIcon.mono");
+  if (style === "search") return t("trayIcon.search");
+  if (style === "bolt") return t("trayIcon.bolt");
+  return t("trayIcon.color");
+}
 
 type SettingsTab = "general" | "search" | "apps";
 
@@ -21,8 +32,22 @@ const version = ref("");
 const updateInfo = ref<AppUpdate | null>(null);
 const checkingUpdate = ref(false);
 const installingUpdate = ref(false);
+const updatePercent = ref(0);
+const updateHasTotal = ref(false);
 
 let unlistenRescan: UnlistenFn | undefined;
+let toastTimer: number | undefined;
+
+function showToast(nextError = "", nextMessage = ""): void {
+  error.value = nextError;
+  message.value = nextMessage;
+  window.clearTimeout(toastTimer);
+  if (!nextError && !nextMessage) return;
+  toastTimer = window.setTimeout(() => {
+    error.value = "";
+    message.value = "";
+  }, 2800);
+}
 
 function setTab(next: SettingsTab): void {
   tab.value = next;
@@ -33,7 +58,7 @@ async function refreshCount(): Promise<void> {
     const info = await getDatabaseInfo();
     appCount.value = info.applicationCount;
   } catch (item) {
-    error.value = item instanceof Error ? item.message : String(item);
+    showToast(item instanceof Error ? item.message : String(item));
   }
 }
 
@@ -41,10 +66,18 @@ async function toggleStartup(): Promise<void> {
   try {
     const next = !settings.launchAtStartup;
     await settings.setLaunchAtStartup(next);
-    error.value = "";
-    message.value = next ? t("settings.startupOn") : t("settings.startupOff");
+    showToast("", next ? t("settings.startupOn") : t("settings.startupOff"));
   } catch (item) {
-    error.value = item instanceof Error ? item.message : String(item);
+    showToast(item instanceof Error ? item.message : String(item));
+  }
+}
+
+async function toggleFullscreen(): Promise<void> {
+  try {
+    await settings.setDisableOnFullscreen(!settings.disableOnFullscreen);
+    showToast("");
+  } catch (item) {
+    showToast(item instanceof Error ? item.message : String(item));
   }
 }
 
@@ -52,27 +85,34 @@ async function cycleShortcut(): Promise<void> {
   try {
     const status = await settings.cycleShortcut();
     if (status.error || !status.registered) {
-      error.value = status.error || t("search.shortcutFailed");
+      showToast(status.error || t("search.shortcutFailed"));
       return;
     }
-    error.value = "";
-    message.value = t("search.shortcutChanged", { label: settings.shortcutLabel });
+    showToast("", t("search.shortcutChanged", { label: settings.shortcutLabel }));
   } catch (item) {
-    error.value = item instanceof Error ? item.message : String(item);
+    showToast(item instanceof Error ? item.message : String(item));
   }
 }
 
 async function applyScan(result: ScanResult): Promise<void> {
   appCount.value = result.applicationCount;
-  message.value = t("settings.scanned", {
-    n: result.applicationCount,
-    inserted: result.inserted,
-    updated: result.updated,
-  });
+  showToast(
+    "",
+    t("settings.scanned", {
+      n: result.applicationCount,
+      inserted: result.inserted,
+      updated: result.updated,
+    }),
+  );
 }
 
 function updateStatus(): string {
-  if (installingUpdate.value) return t("settings.installingUpdate");
+  if (installingUpdate.value) {
+    if (updateHasTotal.value) {
+      return `${t("settings.installingUpdate")} ${t("settings.updateProgress", { percent: updatePercent.value })}`;
+    }
+    return t("settings.installingUpdate");
+  }
   if (checkingUpdate.value) return t("settings.checkingUpdates");
   if (updateInfo.value) return t("settings.updateFound", { version: updateInfo.value.version });
   if (version.value) return t("settings.currentVersion", { version: version.value });
@@ -85,16 +125,17 @@ async function checkUpdate(silent = false): Promise<void> {
     const next = await checkForUpdate();
     updateInfo.value = next;
     if (!silent) {
-      error.value = "";
-      message.value = next ? t("settings.updateFound", { version: next.version }) : t("settings.latest");
+      showToast("", next ? t("settings.updateFound", { version: next.version }) : t("settings.latest"));
     }
   } catch (item) {
     updateInfo.value = null;
     if (!silent) {
       const text = item instanceof Error ? item.message : String(item);
-      error.value = text.includes("Could not fetch") || text.includes("error sending request")
-        ? t("settings.updateFailed")
-        : text;
+      showToast(
+        text.includes("Could not fetch") || text.includes("error sending request")
+          ? t("settings.updateFailed")
+          : text,
+      );
     }
   } finally {
     checkingUpdate.value = false;
@@ -104,22 +145,27 @@ async function checkUpdate(silent = false): Promise<void> {
 async function applyUpdate(): Promise<void> {
   if (!updateInfo.value) return;
   installingUpdate.value = true;
-  error.value = "";
+  updatePercent.value = 0;
+  updateHasTotal.value = false;
+  showToast("");
   try {
-    await installUpdate(updateInfo.value);
+    await installUpdate(updateInfo.value, (progress) => {
+      updateHasTotal.value = progress.total > 0;
+      updatePercent.value = progress.percent;
+    });
   } catch (item) {
-    error.value = item instanceof Error ? item.message : String(item);
+    showToast(item instanceof Error ? item.message : String(item));
     installingUpdate.value = false;
   }
 }
 
 async function rescan(): Promise<void> {
   scanning.value = true;
-  error.value = "";
+  showToast("");
   try {
     await applyScan(await rescanApplications());
   } catch (item) {
-    error.value = item instanceof Error ? item.message : String(item);
+    showToast(item instanceof Error ? item.message : String(item));
   } finally {
     scanning.value = false;
   }
@@ -133,7 +179,7 @@ onMounted(() => {
   });
   if (!isTauri()) return;
   void getShortcutStatus().then((status) => {
-    if (status.error) error.value = status.error;
+    if (status.error) showToast(status.error);
   });
   void checkUpdate(true);
   void listen<ScanResult>("apps-rescanned", (event) => {
@@ -147,6 +193,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  window.clearTimeout(toastTimer);
   void unlistenRescan?.();
 });
 </script>
@@ -166,9 +213,6 @@ onUnmounted(() => {
         </button>
       </nav>
       <main class="settings-main">
-        <div v-if="error" class="banner banner-error">{{ error }}</div>
-        <div v-else-if="message" class="banner banner-ok">{{ message }}</div>
-
         <template v-if="tab === 'general'">
           <h2>{{ t("settings.general") }}</h2>
           <div class="row">
@@ -194,6 +238,20 @@ onUnmounted(() => {
           </div>
           <div class="row">
             <div>
+              <div class="row-title">{{ t("settings.fullscreen") }}</div>
+              <div class="row-desc">{{ t("settings.fullscreenDesc") }}</div>
+            </div>
+            <button
+              type="button"
+              class="toggle"
+              :class="{ on: settings.disableOnFullscreen }"
+              @click="toggleFullscreen"
+            >
+              <i></i>
+            </button>
+          </div>
+          <div class="row">
+            <div>
               <div class="row-title">{{ t("settings.language") }}</div>
               <div class="row-desc">{{ t("settings.languageDesc") }}</div>
             </div>
@@ -212,8 +270,48 @@ onUnmounted(() => {
           </div>
           <div class="row">
             <div>
+              <div class="row-title">{{ t("settings.trayIcon") }}</div>
+              <div class="row-desc">{{ t("settings.trayIconDesc") }}</div>
+            </div>
+            <div class="icon-picks">
+              <button
+                v-for="style in trayIcons"
+                :key="style"
+                type="button"
+                class="icon-pick"
+                :class="{ on: settings.trayIcon === style }"
+                :title="trayIconLabel(style)"
+                @click="settings.setTrayIcon(style)"
+              >
+                <img v-if="style === 'color'" :src="colorIcon" alt="" />
+                <svg v-else-if="style === 'mono'" viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="12" cy="12" r="7.2" fill="none" stroke="currentColor" stroke-width="3.2" />
+                  <path d="M15.2 15.2 19.4 19.4" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" />
+                </svg>
+                <svg v-else-if="style === 'search'" viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="10.4" cy="10.4" r="5.4" fill="none" stroke="currentColor" stroke-width="2.6" />
+                  <path d="M14.6 14.6 19 19" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" />
+                </svg>
+                <svg v-else viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M13.6 3.2 7.4 12.6h4.2L9.6 20.8l7.6-10.4h-4.2z" fill="currentColor" />
+                </svg>
+              </button>
+            </div>
+          </div>
+          <div class="row">
+            <div class="update-copy">
               <div class="row-title">{{ t("settings.updates") }}</div>
               <div class="row-desc">{{ updateStatus() }}</div>
+              <div
+                v-if="installingUpdate"
+                class="update-progress"
+                :class="{ 'is-indeterminate': !updateHasTotal }"
+              >
+                <i
+                  class="update-progress-bar"
+                  :style="updateHasTotal ? { width: `${updatePercent}%` } : undefined"
+                ></i>
+              </div>
             </div>
             <button
               v-if="updateInfo"
@@ -286,5 +384,7 @@ onUnmounted(() => {
         </template>
       </main>
     </div>
+    <div v-if="error" class="settings-toast banner banner-error">{{ error }}</div>
+    <div v-else-if="message" class="settings-toast banner banner-ok">{{ message }}</div>
   </section>
 </template>

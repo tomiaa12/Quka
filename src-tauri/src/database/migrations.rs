@@ -34,7 +34,9 @@ pub fn run(conn: &Connection) -> Result<bool, AppError> {
             result_limit INTEGER NOT NULL,
             enable_usage_ranking INTEGER NOT NULL,
             theme TEXT NOT NULL,
-            locale TEXT NOT NULL DEFAULT 'system'
+            locale TEXT NOT NULL DEFAULT 'system',
+            disable_on_fullscreen INTEGER NOT NULL DEFAULT 1,
+            tray_icon TEXT NOT NULL DEFAULT 'color'
         );
 
         CREATE INDEX IF NOT EXISTS idx_applications_recent
@@ -46,6 +48,18 @@ pub fn run(conn: &Connection) -> Result<bool, AppError> {
     .map_err(AppError::from)?;
 
     ensure_column(conn, "settings", "locale", "TEXT NOT NULL DEFAULT 'system'")?;
+    ensure_column(
+        conn,
+        "settings",
+        "disable_on_fullscreen",
+        "INTEGER NOT NULL DEFAULT 1",
+    )?;
+    ensure_column(
+        conn,
+        "settings",
+        "tray_icon",
+        "TEXT NOT NULL DEFAULT 'color'",
+    )?;
     let added_aliases = ensure_column(
         conn,
         "applications",

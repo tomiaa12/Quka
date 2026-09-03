@@ -155,6 +155,12 @@ fn stop_handle(app: &AppHandle, handle: Option<PlatformHandle>) {
 fn on_shortcut_toggle(app: &AppHandle) {
     let app = app.clone();
     if let Err(error) = app.clone().run_on_main_thread(move || {
+        if crate::fullscreen::should_block_shortcut(&app) {
+            if let Err(error) = crate::app_window::hide_search_window(&app) {
+                log::debug!("全屏时隐藏搜索窗失败：{error}");
+            }
+            return;
+        }
         if let Err(error) = toggle_search_window(&app) {
             log::error!("快捷键呼出窗口失败：{error}");
         }

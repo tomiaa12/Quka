@@ -8,7 +8,12 @@ import {
   updateSettings,
 } from "../services/settings";
 import { applyTheme, nextTheme, themeLabel } from "../services/theme";
-import type { LocaleMode, SettingsState, ThemeMode } from "../types/settings";
+import type { LocaleMode, SettingsState, ThemeMode, TrayIconStyle } from "../types/settings";
+
+function asTrayIcon(value: unknown): TrayIconStyle {
+  if (value === "mono" || value === "search" || value === "bolt") return value;
+  return "color";
+}
 
 function asLocale(value: unknown): LocaleMode {
   if (value === "zh-CN" || value === "en" || value === "system") return value;
@@ -22,6 +27,8 @@ const defaultSettings: SettingsState = {
   enableUsageRanking: true,
   theme: "system",
   locale: "system",
+  disableOnFullscreen: true,
+  trayIcon: "color",
 };
 
 function snapshot(state: SettingsState): SettingsState {
@@ -32,6 +39,8 @@ function snapshot(state: SettingsState): SettingsState {
     enableUsageRanking: state.enableUsageRanking,
     theme: state.theme,
     locale: state.locale,
+    disableOnFullscreen: state.disableOnFullscreen,
+    trayIcon: state.trayIcon,
   };
 }
 
@@ -56,6 +65,8 @@ export const useSettingsStore = defineStore("settings", {
       this.enableUsageRanking = remote.enableUsageRanking;
       this.theme = remote.theme;
       this.locale = asLocale(remote.locale);
+      this.disableOnFullscreen = remote.disableOnFullscreen !== false;
+      this.trayIcon = asTrayIcon(remote.trayIcon);
       applyTheme(this.theme);
       applyLocale(this.locale);
     },
@@ -106,6 +117,14 @@ export const useSettingsStore = defineStore("settings", {
     },
     async setUsageRanking(enabled: boolean) {
       this.enableUsageRanking = enabled;
+      await this.persist();
+    },
+    async setTrayIcon(style: TrayIconStyle) {
+      this.trayIcon = style;
+      await this.persist();
+    },
+    async setDisableOnFullscreen(enabled: boolean) {
+      this.disableOnFullscreen = enabled;
       await this.persist();
     },
     async setLaunchAtStartup(enabled: boolean) {

@@ -37,6 +37,18 @@ pub struct Settings {
     pub enable_usage_ranking: bool,
     pub theme: String,
     pub locale: String,
+    #[serde(default = "default_true")]
+    pub disable_on_fullscreen: bool,
+    #[serde(default = "default_color_icon")]
+    pub tray_icon: String,
+}
+
+fn default_color_icon() -> String {
+    "color".into()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for Settings {
@@ -52,6 +64,8 @@ impl Default for Settings {
             enable_usage_ranking: true,
             theme: "system".into(),
             locale: "system".into(),
+            disable_on_fullscreen: true,
+            tray_icon: "color".into(),
         }
     }
 }

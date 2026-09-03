@@ -5,6 +5,7 @@ mod app_window;
 mod autostart;
 mod commands;
 mod database;
+mod fullscreen;
 mod i18n;
 mod icon;
 mod launcher;
@@ -52,7 +53,7 @@ fn main() {
             if let Err(error) = autostart::sync(settings.launch_at_startup) {
                 log::error!("{error}");
             }
-            if let Err(error) = tray::install(app.handle(), &settings.locale) {
+            if let Err(error) = tray::install(app.handle(), &settings.locale, &settings.tray_icon) {
                 log::error!("系统托盘创建失败：{error}");
             }
             if let Some(window) = app.get_webview_window("main") {
@@ -66,6 +67,12 @@ fn main() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == "settings" {
+                if matches!(event, tauri::WindowEvent::Destroyed) {
+                    crate::app_window::restore_accessory(window.app_handle());
+                }
+                return;
+            }
             if window.label() != "main" {
                 return;
             }
