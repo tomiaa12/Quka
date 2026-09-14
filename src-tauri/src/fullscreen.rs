@@ -51,11 +51,12 @@ mod windows {
 
     fn notification_state_fullscreen() -> bool {
         unsafe {
-            let mut state = Default::default();
-            if SHQueryUserNotificationState(&mut state).is_err() {
-                return false;
+            match SHQueryUserNotificationState() {
+                Ok(state) => {
+                    state == QUNS_RUNNING_D3D_FULL_SCREEN || state == QUNS_PRESENTATION_MODE
+                }
+                Err(_) => false,
             }
-            state == QUNS_RUNNING_D3D_FULL_SCREEN || state == QUNS_PRESENTATION_MODE
         }
     }
 
