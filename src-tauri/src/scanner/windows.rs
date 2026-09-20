@@ -56,7 +56,34 @@ const SKIP_EXE_STEMS: &[&str] = &[
     "installer",
 ];
 
-pub const WINDOWS_SOURCES: &[&str] = &["start-menu", "program-files", "local-programs", "desktop"];
+pub const WINDOWS_SOURCES: &[&str] = &[
+    "start-menu",
+    "program-files",
+    "local-programs",
+    "desktop",
+    "start-apps",
+];
+
+const BROWSER_EXE_STEMS: &[&str] = &[
+    "chrome",
+    "chrome_proxy",
+    "msedge",
+    "msedge_proxy",
+    "brave",
+    "brave_proxy",
+    "chromium",
+    "vivaldi",
+    "opera",
+];
+
+/// Known-folder GUIDs that appear in Start menu AppIDs (e.g. `{7C5A40EF-...}\Adobe\...`).
+const KNOWN_FOLDER_GUIDS: &[(&str, &str)] = &[
+    ("{6D809377-6AF0-444B-8957-A3773F02200E}", "ProgramW6432"),
+    ("{7C5A40EF-A0FB-4BFC-874A-C0F2E0B9FA8E}", "ProgramFiles(x86)"),
+    ("{F38BF404-1D43-42F2-9305-67DE0B28FC23}", "windir"),
+    ("{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}", "SystemRoot"),
+    ("{D65231B0-B2F1-4857-A4CE-A8E7C6EA7D27}", "SystemRoot"),
+];
 
 pub struct WindowsScanner {
     icon_dir: PathBuf,
@@ -124,7 +151,12 @@ impl WindowsScanner {
             }
         }
 
-        Ok(attach_icons(dedup_by_target(apps), &self.icon_dir))
+        match collect_start_apps(&apps) {
+            Ok(extra) => apps.extend(extra),
+            Err(error) => log::warn!("扫描开始菜单应用列表失败：{error}"),
+        }
+
+        Ok(attach_icons(dedup_apps(apps), &self.icon_dir))
     }
 }
 
@@ -291,23 +323,43 @@ fn read_shortcut(link_path: &Path, source: &str) -> Result<Option<Application>, 
                 "快捷方式解析失败，按文件名收录 {}：{error}",
                 link_path.display()
             );
-            return Ok(Some(app_from_link_file(link_path, &name, source)));
+            return Ok(Some(app_from_link_file(link_path, &name, source, None)));
         }
     };
     let target = shortcut
         .link_target()
         .or_else(|| shortcut.string_data().relative_path().clone());
     let Some(target) = target.filter(|value| !value.trim().is_empty()) else {
-        return Ok(Some(app_from_link_file(link_path, &name, source)));
+        return Ok(Some(app_from_link_file(link_path, &name, source, None)));
     };
 
     let target_path = PathBuf::from(&target);
     if is_skipped_exe(&target_path) {
         return Ok(None);
     }
-    if target_path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("exe")) && !target_path.is_file()
+
+    let args = shortcut
+        .string_data()
+        .command_line_arguments()
+        .clone()
+        .unwrap_or_default();
+    // Browser-hosted PWAs must keep the .lnk so ShellExecute preserves --app-id args.
+    if is_browser_exe(&target_path) && is_pwa_arguments(&args) {
+        let bundle_id = browser_pwa_bundle_id(&target_path, &args);
+        return Ok(Some(app_from_link_file(
+            link_path,
+            &name,
+            source,
+            bundle_id.as_deref(),
+        )));
+    }
+
+    if target_path
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
+        && !target_path.is_file()
     {
-        return Ok(Some(app_from_link_file(link_path, &name, source)));
+        return Ok(Some(app_from_link_file(link_path, &name, source, None)));
     }
 
     let path = if target_path.is_file() {
@@ -329,19 +381,292 @@ fn read_shortcut(link_path: &Path, source: &str) -> Result<Option<Application>, 
     }))
 }
 
-fn app_from_link_file(link_path: &Path, name: &str, source: &str) -> Application {
+fn app_from_link_file(
+    link_path: &Path,
+    name: &str,
+    source: &str,
+    bundle_id: Option<&str>,
+) -> Application {
     let path = link_path.to_string_lossy().into_owned();
     Application {
-        id: generate_id(&path, None),
+        id: generate_id(&path, bundle_id),
         name: name.to_string(),
         path,
-        bundle_id: None,
+        bundle_id: bundle_id.map(str::to_string),
         icon: None,
         source: source.into(),
         launch_count: 0,
         last_launch_time: None,
         aliases: String::new(),
     }
+}
+
+fn is_browser_exe(path: &Path) -> bool {
+    path.file_stem()
+        .and_then(|name| name.to_str())
+        .is_some_and(|stem| {
+            BROWSER_EXE_STEMS
+                .iter()
+                .any(|item| stem.eq_ignore_ascii_case(item))
+        })
+}
+
+fn is_pwa_arguments(args: &str) -> bool {
+    let lower = args.to_ascii_lowercase();
+    lower.contains("--app-id=")
+        || lower.contains("--app-id ")
+        || lower.contains("--app=")
+        || lower.contains("--app ")
+}
+
+fn extract_flag_value(args: &str, flag: &str) -> Option<String> {
+    let lower = args.to_ascii_lowercase();
+    let flag_lower = flag.to_ascii_lowercase();
+    let rest = if let Some(idx) = lower.find(&format!("{flag_lower}=")) {
+        &args[idx + flag.len() + 1..]
+    } else if let Some(idx) = lower.find(&format!("{flag_lower} ")) {
+        &args[idx + flag.len() + 1..]
+    } else {
+        return None;
+    };
+    let value = rest
+        .trim_start()
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim_matches('"')
+        .trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn browser_pwa_bundle_id(exe: &Path, args: &str) -> Option<String> {
+    let app_id = extract_flag_value(args, "--app-id")?;
+    let stem = exe
+        .file_stem()
+        .and_then(|name| name.to_str())?
+        .to_ascii_lowercase();
+    let prefix = match stem.as_str() {
+        "chrome" | "chrome_proxy" | "chromium" => "Chrome._crx_",
+        "msedge" | "msedge_proxy" => "MSEdge._crx_",
+        "brave" | "brave_proxy" => "Brave._crx_",
+        _ => return None,
+    };
+    Some(format!("{prefix}{app_id}"))
+}
+
+fn collect_start_apps(existing: &[Application]) -> Result<Vec<Application>, AppError> {
+    #[cfg(windows)]
+    {
+        let entries = query_start_apps()?;
+        let mut seen_paths: HashSet<String> = existing
+            .iter()
+            .map(|app| normalize_path(&app.path))
+            .collect();
+        let mut seen_ids: HashSet<String> = existing.iter().map(|app| app.id.clone()).collect();
+        let mut apps = Vec::new();
+
+        for entry in entries {
+            let name = entry.name.trim();
+            let app_id = entry.app_id.trim();
+            if name.is_empty() || app_id.is_empty() || is_skipped_shortcut_name(name) {
+                continue;
+            }
+            if seen_ids.contains(app_id) {
+                continue;
+            }
+
+            if let Some(resolved) = resolve_start_app_path(app_id) {
+                if is_skipped_exe(&resolved) {
+                    continue;
+                }
+                let path = resolved.to_string_lossy().into_owned();
+                let key = normalize_path(&path);
+                if !seen_paths.insert(key) {
+                    continue;
+                }
+                let id = generate_id(&path, None);
+                if !seen_ids.insert(id.clone()) {
+                    continue;
+                }
+                apps.push(Application {
+                    id,
+                    name: name.to_string(),
+                    path,
+                    bundle_id: None,
+                    icon: None,
+                    source: "start-apps".into(),
+                    launch_count: 0,
+                    last_launch_time: None,
+                    aliases: String::new(),
+                });
+                continue;
+            }
+
+            // Store / UWP / PWA / unresolved Start AppIDs launch via shell:AppsFolder.
+            let path = format!("shell:AppsFolder\\{app_id}");
+            let key = normalize_path(&path);
+            if !seen_paths.insert(key) {
+                continue;
+            }
+            if !seen_ids.insert(app_id.to_string()) {
+                continue;
+            }
+            apps.push(Application {
+                id: generate_id(&path, Some(app_id)),
+                name: name.to_string(),
+                path,
+                bundle_id: Some(app_id.to_string()),
+                icon: None,
+                source: "start-apps".into(),
+                launch_count: 0,
+                last_launch_time: None,
+                aliases: String::new(),
+            });
+        }
+
+        Ok(apps)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = existing;
+        Ok(Vec::new())
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct StartAppEntry {
+    #[serde(rename = "Name")]
+    name: String,
+    #[serde(rename = "AppID")]
+    app_id: String,
+}
+
+#[cfg(windows)]
+fn query_start_apps() -> Result<Vec<StartAppEntry>, AppError> {
+    let output = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "Get-StartApps | ConvertTo-Json -Compress",
+        ])
+        .output()
+        .map_err(|error| AppError::Io(format!("无法执行 Get-StartApps：{error}")))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(AppError::Io(format!(
+            "Get-StartApps 失败：{}",
+            stderr.trim()
+        )));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() || trimmed == "null" {
+        return Ok(Vec::new());
+    }
+
+    if trimmed.starts_with('[') {
+        serde_json::from_str(trimmed)
+            .map_err(|error| AppError::Io(format!("解析 Get-StartApps JSON 失败：{error}")))
+    } else {
+        let single: StartAppEntry = serde_json::from_str(trimmed)
+            .map_err(|error| AppError::Io(format!("解析 Get-StartApps JSON 失败：{error}")))?;
+        Ok(vec![single])
+    }
+}
+
+fn is_shell_start_app_id(app_id: &str) -> bool {
+    let id = app_id.trim();
+    if id.is_empty() {
+        return false;
+    }
+    if id.contains('!') || id.contains("._crx_") {
+        return true;
+    }
+    // Hosted app / protocol-style IDs that are not filesystem paths.
+    if looks_like_filesystem_app_id(id) {
+        return false;
+    }
+    true
+}
+
+fn looks_like_filesystem_app_id(app_id: &str) -> bool {
+    let id = app_id.trim();
+    if id.len() >= 3 {
+        let bytes = id.as_bytes();
+        if bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/')
+        {
+            return true;
+        }
+    }
+    id.starts_with("\\\\") || id.starts_with('{') || id.to_ascii_lowercase().ends_with(".exe")
+}
+
+fn resolve_start_app_path(app_id: &str) -> Option<PathBuf> {
+    let id = app_id.trim();
+    if id.is_empty() {
+        return None;
+    }
+
+    if id.len() >= 3 {
+        let bytes = id.as_bytes();
+        if bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && (bytes[2] == b'\\' || bytes[2] == b'/')
+        {
+            let path = PathBuf::from(id);
+            return path.is_file().then_some(path);
+        }
+    }
+    if id.starts_with("\\\\") {
+        let path = PathBuf::from(id);
+        return path.is_file().then_some(path);
+    }
+
+    if let Some(path) = resolve_known_folder_app_id(id) {
+        return path.is_file().then_some(path);
+    }
+
+    None
+}
+
+fn resolve_known_folder_app_id(app_id: &str) -> Option<PathBuf> {
+    let end = app_id.find('}')?;
+    if !app_id.starts_with('{') {
+        return None;
+    }
+    let guid = &app_id[..=end];
+    let rest = app_id[end + 1..].trim_start_matches(['\\', '/']);
+    let env_key = KNOWN_FOLDER_GUIDS
+        .iter()
+        .find(|(key, _)| key.eq_ignore_ascii_case(guid))
+        .map(|(_, key)| *key)?;
+    let base = if env_key == "SystemRoot" || env_key == "windir" {
+        std::env::var("SystemRoot")
+            .or_else(|_| std::env::var("windir"))
+            .ok()
+            .map(PathBuf::from)?
+    } else {
+        std::env::var(env_key).ok().map(PathBuf::from)?
+    };
+    let path = if env_key == "SystemRoot" && guid.eq_ignore_ascii_case("{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}")
+    {
+        base.join("System32").join(rest)
+    } else if env_key == "SystemRoot"
+        && guid.eq_ignore_ascii_case("{D65231B0-B2F1-4857-A4CE-A8E7C6EA7D27}")
+    {
+        base.join("SysWOW64").join(rest)
+    } else if env_key == "windir" {
+        base.join(rest)
+    } else {
+        base.join(rest)
+    };
+    Some(path)
 }
 
 fn read_executable(exe_path: &Path, source: &str) -> Result<Option<Application>, AppError> {
@@ -419,12 +744,13 @@ fn attach_icons(mut apps: Vec<Application>, icon_dir: &Path) -> Vec<Application>
     apps
 }
 
-fn dedup_by_target(apps: Vec<Application>) -> Vec<Application> {
-    let mut seen = HashSet::new();
+fn dedup_apps(apps: Vec<Application>) -> Vec<Application> {
+    let mut seen_paths = HashSet::new();
+    let mut seen_ids = HashSet::new();
     let mut unique = Vec::new();
     for app in apps {
-        let key = normalize_path(&app.path);
-        if !seen.insert(key) {
+        let path_key = normalize_path(&app.path);
+        if !seen_paths.insert(path_key) || !seen_ids.insert(app.id.clone()) {
             continue;
         }
         unique.push(app);
@@ -435,8 +761,10 @@ fn dedup_by_target(apps: Vec<Application>) -> Vec<Application> {
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_files, dedup_by_target, is_skipped_dir, is_skipped_exe, is_skipped_shortcut_name,
-        pick_main_exes, source_for_program, watch_directories, WindowsScanner,
+        browser_pwa_bundle_id, collect_files, dedup_apps, extract_flag_value, is_browser_exe,
+        is_pwa_arguments, is_shell_start_app_id, is_skipped_dir, is_skipped_exe,
+        is_skipped_shortcut_name, looks_like_filesystem_app_id, pick_main_exes,
+        resolve_known_folder_app_id, source_for_program, watch_directories, WindowsScanner,
     };
     use crate::database::models::Application;
     use crate::scanner::ApplicationScanner;
@@ -486,6 +814,53 @@ mod tests {
         assert!(is_skipped_dir(&Path::new("App").join("uninstall")));
         assert!(is_skipped_dir(&Path::new("Program Files").join("WindowsApps")));
         assert!(!is_skipped_dir(&Path::new("Program Files").join("Google")));
+    }
+
+    #[test]
+    fn detects_pwa_browser_shortcuts() {
+        assert!(is_browser_exe(Path::new(
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+        )));
+        assert!(is_pwa_arguments("--app-id=cadlkienfkbeoongdcgmdikeeg"));
+        assert!(is_pwa_arguments("--profile-directory=Default --app=https://chatgpt.com"));
+        assert!(!is_pwa_arguments("--profile-directory=Default"));
+        assert_eq!(
+            browser_pwa_bundle_id(
+                Path::new(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+                "--app-id=cadlkienfkbeoongdcgmdikeeg"
+            )
+            .as_deref(),
+            Some("Chrome._crx_cadlkienfkbeoongdcgmdikeeg")
+        );
+        assert_eq!(
+            extract_flag_value("--app-id=abc123 --profile-directory=Default", "--app-id")
+                .as_deref(),
+            Some("abc123")
+        );
+    }
+
+    #[test]
+    fn classifies_start_app_ids() {
+        assert!(is_shell_start_app_id("Claude_pzs8sxrjxfjjc!Claude"));
+        assert!(is_shell_start_app_id("OpenAI.Codex_2p2nqsd0c76g0!App"));
+        assert!(is_shell_start_app_id("Chrome._crx_cadlkienfkbeoongdcgmdikeeg"));
+        assert!(!is_shell_start_app_id(r"D:\7-zip\7zFM.exe"));
+        assert!(looks_like_filesystem_app_id(
+            r"{7C5A40EF-A0FB-4BFC-874A-C0F2E0B9FA8E}\Adobe\Acrobat DC\Acrobat\Acrobat.exe"
+        ));
+    }
+
+    #[test]
+    fn resolves_program_files_guid_app_id() {
+        let path = resolve_known_folder_app_id(
+            r"{6D809377-6AF0-444B-8957-A3773F02200E}\Quka\Quka.exe",
+        )
+        .expect("guid should map");
+        let rendered = path.to_string_lossy().to_ascii_lowercase();
+        assert!(
+            rendered.ends_with(r"\quka\quka.exe") || rendered.ends_with("/quka/quka.exe"),
+            "{rendered}"
+        );
     }
 
     #[test]
@@ -550,7 +925,38 @@ mod tests {
                 aliases: String::new(),
             },
         ];
-        let unique = dedup_by_target(apps);
+        let unique = dedup_apps(apps);
+        assert_eq!(unique.len(), 1);
+        assert_eq!(unique[0].source, "start-menu");
+    }
+
+    #[test]
+    fn dedups_same_bundle_id() {
+        let apps = vec![
+            Application {
+                id: "Chrome._crx_abc".into(),
+                name: "ChatGPT".into(),
+                path: r"C:\Users\Ada\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\ChatGPT.lnk".into(),
+                bundle_id: Some("Chrome._crx_abc".into()),
+                icon: None,
+                source: "start-menu".into(),
+                launch_count: 0,
+                last_launch_time: None,
+                aliases: String::new(),
+            },
+            Application {
+                id: "Chrome._crx_abc".into(),
+                name: "ChatGPT".into(),
+                path: r"shell:AppsFolder\Chrome._crx_abc".into(),
+                bundle_id: Some("Chrome._crx_abc".into()),
+                icon: None,
+                source: "start-apps".into(),
+                launch_count: 0,
+                last_launch_time: None,
+                aliases: String::new(),
+            },
+        ];
+        let unique = dedup_apps(apps);
         assert_eq!(unique.len(), 1);
         assert_eq!(unique[0].source, "start-menu");
     }
@@ -592,7 +998,21 @@ mod tests {
             vec![root.join("missing-pf")],
         );
         let apps = ApplicationScanner::scan(&scanner).unwrap();
-        assert!(apps.is_empty());
+        // On Windows, Get-StartApps may still return installed apps.
+        if cfg!(target_os = "windows") {
+            assert!(apps.iter().all(|app| {
+                matches!(
+                    app.source.as_str(),
+                    "start-apps"
+                        | "start-menu"
+                        | "program-files"
+                        | "local-programs"
+                        | "desktop"
+                )
+            }));
+        } else {
+            assert!(apps.is_empty());
+        }
     }
 
     #[test]
@@ -606,9 +1026,11 @@ mod tests {
             vec![root.join("Program Files")],
         );
         let apps = scanner.scan_directories().unwrap();
-        assert_eq!(apps.len(), 1);
-        assert_eq!(apps[0].name, "QukaTest");
-        assert_eq!(apps[0].source, "program-files");
+        assert!(
+            apps.iter()
+                .any(|app| app.name == "QukaTest" && app.source == "program-files"),
+            "expected QukaTest in {apps:?}"
+        );
     }
 
     #[cfg(windows)]
@@ -634,14 +1056,16 @@ mod tests {
 
         let scanner = WindowsScanner::with_directories(root.join("icons"), vec![root.clone()], vec![]);
         let apps = scanner.scan_directories().unwrap();
-        assert_eq!(apps.len(), 1);
-        assert_eq!(apps[0].name, "Notepad");
-        assert_eq!(apps[0].source, "start-menu");
-        assert!(apps[0]
-            .path
-            .to_ascii_lowercase()
-            .ends_with("notepad.exe"));
-        assert!(apps[0].icon.as_ref().is_some_and(|icon| Path::new(icon).is_file()));
+        assert!(
+            apps.iter().any(|app| {
+                app.name == "Notepad"
+                    && app.source == "start-menu"
+                    && app.path.to_ascii_lowercase().ends_with("notepad.exe")
+            }),
+            "expected Notepad shortcut in {apps:?}"
+        );
+        let notepad = apps.iter().find(|app| app.name == "Notepad").unwrap();
+        assert!(notepad.icon.as_ref().is_some_and(|icon| Path::new(icon).is_file()));
     }
 
     #[cfg(windows)]
@@ -656,7 +1080,7 @@ mod tests {
         assert!(apps.iter().any(|app| {
             matches!(
                 app.source.as_str(),
-                "start-menu" | "program-files" | "local-programs" | "desktop"
+                "start-menu" | "program-files" | "local-programs" | "desktop" | "start-apps"
             )
         }));
         assert!(apps.iter().any(|app| !app.name.is_empty() && !app.path.is_empty()));
@@ -668,16 +1092,54 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn indexes_store_and_pwa_start_apps() {
+        let scanner = WindowsScanner::with_directories(
+            temp_dir("start-apps"),
+            vec![],
+            vec![],
+        );
+        let apps = scanner.scan_directories().unwrap();
+        let chatgpt = apps
+            .iter()
+            .filter(|app| app.name.eq_ignore_ascii_case("ChatGPT"))
+            .collect::<Vec<_>>();
+        let claude = apps
+            .iter()
+            .filter(|app| app.name.eq_ignore_ascii_case("Claude"))
+            .collect::<Vec<_>>();
+        assert!(
+            !chatgpt.is_empty(),
+            "ChatGPT store/PWA entry should be indexed via Get-StartApps"
+        );
+        assert!(
+            !claude.is_empty(),
+            "Claude store entry should be indexed via Get-StartApps"
+        );
+        assert!(chatgpt.iter().any(|app| {
+            app.path.to_ascii_lowercase().contains("shell:appsfolder\\")
+                || app.bundle_id.as_deref().is_some_and(|id| id.contains("._crx_") || id.contains('!'))
+        }));
+        assert!(claude.iter().any(|app| {
+            app.bundle_id
+                .as_deref()
+                .is_some_and(|id| id.contains('!'))
+                || app.path.to_ascii_lowercase().contains("shell:appsfolder\\")
+        }));
+    }
+
     #[test]
     fn includes_unreadable_shortcut_by_name() {
         let root = temp_dir("badlnk");
         fs::write(root.join("微信.lnk"), b"not-a-real-shortcut").unwrap();
         let scanner = WindowsScanner::with_directories(root.join("icons"), vec![root.clone()], vec![]);
         let apps = scanner.scan_directories().unwrap();
-        assert_eq!(apps.len(), 1);
-        assert_eq!(apps[0].name, "微信");
-        assert!(apps[0].path.ends_with("微信.lnk"));
-        assert_eq!(apps[0].source, "start-menu");
+        assert!(
+            apps.iter()
+                .any(|app| app.name == "微信" && app.path.ends_with("微信.lnk")),
+            "expected WeChat bad shortcut in {apps:?}"
+        );
     }
 
     #[test]
@@ -687,9 +1149,11 @@ mod tests {
         let scanner = WindowsScanner::with_directories(root.join("icons"), vec![], vec![])
             .with_desktop(vec![root.clone()]);
         let apps = scanner.scan_directories().unwrap();
-        assert_eq!(apps.len(), 1);
-        assert_eq!(apps[0].name, "微信");
-        assert_eq!(apps[0].source, "desktop");
+        assert!(
+            apps.iter()
+                .any(|app| app.name == "微信" && app.source == "desktop"),
+            "expected desktop WeChat in {apps:?}"
+        );
     }
 
     #[cfg(windows)]
@@ -716,6 +1180,21 @@ mod tests {
         assert!(
             icon.as_ref().is_some_and(|path| Path::new(path).is_file()),
             "WeChat shortcut icon should be readable via the shell"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn extracts_shell_apps_folder_icon() {
+        let root = temp_dir("shell-icon");
+        let icon = crate::icon::windows::cache_file_icon(
+            "claude-shell",
+            Path::new(r"shell:AppsFolder\Claude_pzs8sxrjxfjjc!Claude"),
+            &root,
+        );
+        assert!(
+            icon.as_ref().is_some_and(|path| Path::new(path).is_file()),
+            "shell:AppsFolder icons should be readable via SHGetFileInfo"
         );
     }
 }

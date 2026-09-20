@@ -12,9 +12,14 @@ pub fn is_supported() -> bool {
 
 impl ApplicationLauncher for WindowsLauncher {
     fn launch(&self, app: &Application) -> Result<(), AppError> {
-        let path = validate_path(&app.path)?;
         log::info!("启动应用 {}", app.name);
-        match shell_execute(&path) {
+        let result = if let Some(target) = shell_apps_folder_target(app) {
+            shell_execute_str(&target)
+        } else {
+            let path = validate_path(&app.path)?;
+            shell_execute(&path)
+        };
+        match result {
             Ok(()) => Ok(()),
             Err(error) => {
                 log::error!("启动应用失败 {}：{error}", app.name);
@@ -24,18 +29,36 @@ impl ApplicationLauncher for WindowsLauncher {
     }
 }
 
+fn shell_apps_folder_target(app: &Application) -> Option<String> {
+    let path = app.path.trim();
+    let lower = path.to_ascii_lowercase();
+    if lower.starts_with("shell:appsfolder\\") || lower.starts_with("shell:appsfolder/") {
+        return Some(path.to_string());
+    }
+    None
+}
+
 #[cfg(windows)]
 fn shell_execute(path: &Path) -> Result<(), AppError> {
+    shell_execute_str(&path.to_string_lossy())
+}
+
+#[cfg(windows)]
+fn shell_execute_str(target: &str) -> Result<(), AppError> {
     use windows::core::PCWSTR;
     use windows::Win32::UI::Shell::ShellExecuteW;
     use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
-    let file = wide(path.as_os_str());
-    let directory = path
+    let file = wide_str(target);
+    let directory = Path::new(target)
         .parent()
-        .map(|parent| wide(parent.as_os_str()))
+        .filter(|parent| {
+            let value = parent.to_string_lossy();
+            !value.is_empty() && !value.eq_ignore_ascii_case("shell:AppsFolder")
+        })
+        .map(|parent| wide_str(&parent.to_string_lossy()))
         .unwrap_or_default();
-    let operation = wide(std::ffi::OsStr::new("open"));
+    let operation = wide_str("open");
 
     let result = unsafe {
         ShellExecuteW(
@@ -65,15 +88,23 @@ fn shell_execute(_path: &Path) -> Result<(), AppError> {
     Err(AppError::Launcher("当前平台不是 Windows".into()))
 }
 
+#[cfg(not(windows))]
+fn shell_execute_str(_target: &str) -> Result<(), AppError> {
+    Err(AppError::Launcher("当前平台不是 Windows".into()))
+}
+
 #[cfg(windows)]
-fn wide(value: &std::ffi::OsStr) -> Vec<u16> {
+fn wide_str(value: &str) -> Vec<u16> {
     use std::os::windows::ffi::OsStrExt;
-    value.encode_wide().chain(std::iter::once(0)).collect()
+    std::ffi::OsStr::new(value)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::WindowsLauncher;
+    use super::{shell_apps_folder_target, WindowsLauncher};
     use crate::database::models::Application;
     use crate::launcher::ApplicationLauncher;
 
@@ -97,6 +128,18 @@ mod tests {
             .launch(&app(r"C:\missing-quka-launcher.exe"))
             .unwrap_err();
         assert!(error.to_string().contains("路径不存在"));
+    }
+
+    #[test]
+    fn detects_shell_apps_folder_target() {
+        let target = shell_apps_folder_target(&app(
+            r"shell:AppsFolder\Claude_pzs8sxrjxfjjc!Claude",
+        ));
+        assert_eq!(
+            target.as_deref(),
+            Some(r"shell:AppsFolder\Claude_pzs8sxrjxfjjc!Claude")
+        );
+        assert!(shell_apps_folder_target(&app(r"C:\Windows\System32\notepad.exe")).is_none());
     }
 
     #[cfg(windows)]

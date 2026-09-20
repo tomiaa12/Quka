@@ -20,13 +20,21 @@ fn try_cache_file_icon(
     file_path: &Path,
     icon_dir: &Path,
 ) -> Result<Option<String>, AppError> {
-    if !file_path.is_file() {
+    let is_shell_target = file_path
+        .to_string_lossy()
+        .to_ascii_lowercase()
+        .starts_with("shell:");
+    if !is_shell_target && !file_path.is_file() {
         return Ok(None);
     }
 
     fs::create_dir_all(icon_dir).map_err(|error| AppError::Io(error.to_string()))?;
     let dest = icon_dir.join(format!("{}.png", sanitize_file_stem(app_id)));
-    if cache_is_fresh(&dest, file_path) {
+    if is_shell_target {
+        if dest.is_file() {
+            return Ok(Some(dest.to_string_lossy().into_owned()));
+        }
+    } else if cache_is_fresh(&dest, file_path) {
         return Ok(Some(dest.to_string_lossy().into_owned()));
     }
 
@@ -67,20 +75,27 @@ mod windows_extract {
     use std::ptr;
 
     use windows::core::PCWSTR;
+    use windows::Win32::Foundation::SIZE;
     use windows::Win32::Graphics::Gdi::{
         CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC,
-        BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, BI_RGB,
+        BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, HBITMAP, BI_RGB,
     };
+    use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
     use windows::Win32::UI::Shell::{
-        ExtractIconExW, SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON,
+        SHCreateItemFromParsingName, ExtractIconExW, IShellItemImageFactory, SHGetFileInfoW,
+        SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON, SIIGBF_ICONONLY, SIIGBF_RESIZETOFIT,
     };
     use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, ICONINFO};
 
     use crate::state::AppError;
 
     pub fn extract_to_png(file_path: &Path, dest: &Path) -> Result<(), AppError> {
-        let wide: Vec<u16> = file_path
-            .as_os_str()
+        let target = file_path.to_string_lossy();
+        if target.to_ascii_lowercase().starts_with("shell:") {
+            return extract_shell_item_to_png(&target, dest);
+        }
+
+        let wide: Vec<u16> = std::ffi::OsStr::new(target.as_ref())
             .encode_wide()
             .chain(std::iter::once(0))
             .collect();
@@ -105,6 +120,32 @@ mod windows_extract {
         result
     }
 
+    fn extract_shell_item_to_png(target: &str, dest: &Path) -> Result<(), AppError> {
+        // Best-effort COM init for unit tests; the app process usually already has it.
+        let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+        let wide: Vec<u16> = std::ffi::OsStr::new(target)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let factory: IShellItemImageFactory = unsafe {
+            SHCreateItemFromParsingName(PCWSTR(wide.as_ptr()), None)
+                .map_err(|error| AppError::Io(format!("无法解析 shell 应用项：{error}")))?
+        };
+        let bitmap = unsafe {
+            factory
+                .GetImage(
+                    SIZE { cx: 64, cy: 64 },
+                    SIIGBF_RESIZETOFIT | SIIGBF_ICONONLY,
+                )
+                .map_err(|error| AppError::Io(format!("无法提取 shell 应用图标：{error}")))?
+        };
+        let converted = hbitmap_to_png(bitmap, dest);
+        unsafe {
+            let _ = DeleteObject(bitmap.into());
+        }
+        converted
+    }
+
     fn icon_from_shell(wide: &[u16]) -> Result<HICON, AppError> {
         let mut info = SHFILEINFOW::default();
         let result = unsafe {
@@ -122,32 +163,21 @@ mod windows_extract {
         Ok(info.hIcon)
     }
 
-    fn hicon_to_png(icon: HICON, dest: &Path) -> Result<(), AppError> {
+    fn hbitmap_to_png(bitmap: HBITMAP, dest: &Path) -> Result<(), AppError> {
         unsafe {
-            let mut info = ICONINFO::default();
-            GetIconInfo(icon, &mut info).map_err(|error| AppError::Io(error.to_string()))?;
-            if info.hbmColor.is_invalid() {
-                let _ = DeleteObject(info.hbmMask.into());
-                return Err(AppError::Io("图标位图无效".into()));
-            }
-
-            let mut bitmap = BITMAP::default();
+            let mut info = BITMAP::default();
             if GetObjectW(
-                info.hbmColor.into(),
+                bitmap.into(),
                 std::mem::size_of::<BITMAP>() as i32,
-                Some(ptr::from_mut(&mut bitmap).cast()),
+                Some(ptr::from_mut(&mut info).cast()),
             ) == 0
             {
-                let _ = DeleteObject(info.hbmColor.into());
-                let _ = DeleteObject(info.hbmMask.into());
                 return Err(AppError::Io("读取图标位图失败".into()));
             }
 
-            let width = bitmap.bmWidth;
-            let height = bitmap.bmHeight.unsigned_abs() as i32;
+            let width = info.bmWidth;
+            let height = info.bmHeight.unsigned_abs() as i32;
             if width <= 0 || height <= 0 {
-                let _ = DeleteObject(info.hbmColor.into());
-                let _ = DeleteObject(info.hbmMask.into());
                 return Err(AppError::Io("图标尺寸无效".into()));
             }
 
@@ -169,7 +199,7 @@ mod windows_extract {
             let mut pixels = vec![0u8; (width * height * 4) as usize];
             let copied = GetDIBits(
                 hdc,
-                info.hbmColor,
+                bitmap,
                 0,
                 height as u32,
                 Some(pixels.as_mut_ptr().cast()),
@@ -179,8 +209,6 @@ mod windows_extract {
 
             let _ = DeleteDC(hdc);
             ReleaseDC(None, hdc_screen);
-            let _ = DeleteObject(info.hbmColor.into());
-            let _ = DeleteObject(info.hbmMask.into());
 
             if copied == 0 {
                 return Err(AppError::Io("导出图标像素失败".into()));
@@ -198,8 +226,23 @@ mod windows_extract {
                 image::ExtendedColorType::Rgba8,
             )
             .map_err(|error| AppError::Io(error.to_string()))?;
-            let _ = header;
             Ok(())
+        }
+    }
+
+    fn hicon_to_png(icon: HICON, dest: &Path) -> Result<(), AppError> {
+        unsafe {
+            let mut info = ICONINFO::default();
+            GetIconInfo(icon, &mut info).map_err(|error| AppError::Io(error.to_string()))?;
+            if info.hbmColor.is_invalid() {
+                let _ = DeleteObject(info.hbmMask.into());
+                return Err(AppError::Io("图标位图无效".into()));
+            }
+
+            let result = hbitmap_to_png(info.hbmColor, dest);
+            let _ = DeleteObject(info.hbmColor.into());
+            let _ = DeleteObject(info.hbmMask.into());
+            result
         }
     }
 }

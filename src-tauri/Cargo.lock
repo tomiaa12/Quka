@@ -3008,7 +3008,7 @@ dependencies = [
 
 [[package]]
 name = "quka"
-version = "1.1.5"
+version = "1.1.7"
 dependencies = [
  "auto-launch",
  "block2",
