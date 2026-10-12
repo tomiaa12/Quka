@@ -64,6 +64,11 @@ mod native {
 
     static GENERATION: AtomicU64 = AtomicU64::new(0);
     static ACTIVITY_STARTED: AtomicBool = AtomicBool::new(false);
+    static TAP_PORT: AtomicUsize = AtomicUsize::new(0);
+    static LISTEN_READY: AtomicBool = AtomicBool::new(false);
+
+    /// 主循环起来之后再确认几次。启动瞬间 AXIsProcessTrusted 会误报未授权。
+    const TRUST_RETRIES_BEFORE_PROMPT: u32 = 8;
 
     struct Installed {
         monitors: Vec<Retained<AnyObject>>,
@@ -82,6 +87,7 @@ mod native {
     #[link(name = "CoreGraphics", kind = "framework")]
     extern "C" {
         fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
+        fn CGEventTapIsEnabled(tap: CFMachPortRef) -> bool;
     }
 
     #[link(name = "ApplicationServices", kind = "framework")]
@@ -98,6 +104,10 @@ mod native {
         unsafe { AXIsProcessTrusted() }
     }
 
+    fn should_prompt_for_trust(trusted: bool, already_prompted: bool, attempt: u32) -> bool {
+        !trusted && !already_prompted && attempt >= TRUST_RETRIES_BEFORE_PROMPT
+    }
+
     fn request_accessibility_access() -> bool {
         if is_trusted() {
             return true;
@@ -107,6 +117,17 @@ mod native {
             let options = CFDictionary::from_CFType_pairs(&[(key, CFBoolean::true_value())]);
             AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef())
         }
+    }
+
+    fn listen_healthy() -> bool {
+        if !LISTEN_READY.load(Ordering::SeqCst) {
+            return false;
+        }
+        let port = TAP_PORT.load(Ordering::SeqCst);
+        if port == 0 {
+            return true;
+        }
+        unsafe { CGEventTapIsEnabled(port as CFMachPortRef) }
     }
 
     fn prevent_app_nap() {
@@ -153,29 +174,27 @@ mod native {
             })
             .map_err(|error| AppError::Shortcut(format!("快捷键注册失败：{error}")))?;
 
-        request_accessibility_access();
+        // 不要在这里弹辅助功能授权框。启动瞬间权限检查会误报失败，
+        // 一旦弹出系统框，当前进程的全局监听会一直失效，直到再开一个进程。
         let trusted = is_trusted();
         let installed = run_sync_on_main(app, {
             let detector = detector.clone();
             let trigger_tx = trigger_tx.clone();
             move || install(generation, detector, trigger_tx)
         })?;
+        spawn_listen_keeper(app.clone(), generation, detector, trigger_tx.clone());
 
-        if !installed.global {
-            spawn_trust_waiter(app.clone(), generation, detector, trigger_tx.clone());
-        }
-
-        let warning = if installed.global {
+        let warning = if installed.global || !trusted {
             None
-        } else if trusted {
-            Some("全局快捷键未能挂到主线程，请重启 Quka".into())
         } else {
-            Some(ACCESSIBILITY_HINT.into())
+            Some("全局快捷键未能挂到主线程，请重启 Quka".into())
         };
         if let Some(warning) = &warning {
             log::warn!("{warning}");
-        } else {
+        } else if installed.global {
             log::info!("快捷键监听已挂到主线程（其它应用前台也可触发）");
+        } else {
+            log::info!("辅助功能权限尚未确认，主循环启动后会重试，先不弹出系统授权框");
         }
 
         Ok((
@@ -252,12 +271,14 @@ mod native {
             installed.tap = tap;
         });
 
-        InstallResult {
-            global: global || has_tap,
-        }
+        let ready = global || has_tap;
+        LISTEN_READY.store(ready, Ordering::SeqCst);
+        InstallResult { global: ready }
     }
 
     fn uninstall() {
+        TAP_PORT.store(0, Ordering::SeqCst);
+        LISTEN_READY.store(false, Ordering::SeqCst);
         INSTALLED.with(|slot| {
             let mut installed = slot.borrow_mut();
             for monitor in installed.monitors.drain(..) {
@@ -281,17 +302,16 @@ mod native {
             port_slot.clone(),
         )
         .ok()?;
-        port_slot.store(
-            tap.mach_port().as_concrete_TypeRef() as usize,
-            Ordering::SeqCst,
-        );
+        let port = tap.mach_port().as_concrete_TypeRef() as usize;
+        port_slot.store(port, Ordering::SeqCst);
         let loop_source = tap.mach_port().create_runloop_source(0).ok()?;
         CFRunLoop::get_main().add_source(&loop_source, unsafe { kCFRunLoopCommonModes });
         tap.enable();
+        TAP_PORT.store(port, Ordering::SeqCst);
         Some(tap)
     }
 
-    fn spawn_trust_waiter(
+    fn spawn_listen_keeper(
         app: AppHandle,
         generation: u64,
         detector: Arc<Mutex<DoubleTapDetector>>,
@@ -300,33 +320,117 @@ mod native {
         std::thread::Builder::new()
             .name("quka-shortcut-trust".into())
             .spawn(move || {
-                for _ in 0..180 {
-                    std::thread::sleep(Duration::from_secs(1));
+                let mut prompted = false;
+                let mut attempt = 0u32;
+                loop {
+                    if attempt > 0 {
+                        let delay = if attempt < TRUST_RETRIES_BEFORE_PROMPT {
+                            Duration::from_millis(250)
+                        } else {
+                            Duration::from_secs(1)
+                        };
+                        std::thread::sleep(delay);
+                    }
                     if GENERATION.load(Ordering::SeqCst) != generation {
                         return;
                     }
-                    if !is_trusted() {
-                        continue;
-                    }
-                    log::info!("已获得辅助功能权限，正在重新挂载全局快捷键");
-                    let detector = detector.clone();
-                    let trigger_tx = trigger_tx.clone();
-                    if run_sync_on_main(&app, move || {
+                    let trusted = run_sync_on_main(&app, move || {
                         if GENERATION.load(Ordering::SeqCst) != generation {
+                            return false;
+                        }
+                        is_trusted()
+                    })
+                    .unwrap_or(false);
+                    if GENERATION.load(Ordering::SeqCst) != generation {
+                        return;
+                    }
+                    attempt = attempt.saturating_add(1);
+
+                    if !trusted {
+                        if should_prompt_for_trust(false, prompted, attempt) {
+                            prompted = true;
+                            log::info!("仍未获得辅助功能权限，请求系统授权");
+                            let _ = run_sync_on_main(&app, request_accessibility_access);
+                            if !is_trusted() {
+                                if let Some(state) =
+                                    app.try_state::<crate::shortcut::ShortcutState>()
+                                {
+                                    state.set_error(ACCESSIBILITY_HINT);
+                                }
+                            }
+                        }
+                        if attempt >= TRUST_RETRIES_BEFORE_PROMPT + 180 {
                             return;
                         }
-                        install(generation, detector, trigger_tx);
-                    })
-                    .is_ok()
-                    {
-                        if let Some(state) = app.try_state::<crate::shortcut::ShortcutState>() {
-                            state.clear_error();
-                        }
+                        continue;
                     }
-                    return;
+
+                    remount_if_needed(&app, generation, &detector, &trigger_tx);
+                    note_listen_state(&app);
+                    break;
+                }
+
+                loop {
+                    std::thread::sleep(Duration::from_secs(2));
+                    if GENERATION.load(Ordering::SeqCst) != generation {
+                        return;
+                    }
+                    let needs_remount = run_sync_on_main(&app, move || {
+                        if GENERATION.load(Ordering::SeqCst) != generation {
+                            return false;
+                        }
+                        let port = TAP_PORT.load(Ordering::SeqCst);
+                        if port == 0 {
+                            return !LISTEN_READY.load(Ordering::SeqCst);
+                        }
+                        if unsafe { CGEventTapIsEnabled(port as CFMachPortRef) } {
+                            return false;
+                        }
+                        log::warn!("快捷键监听被系统停用，正在重新启用");
+                        unsafe { CGEventTapEnable(port as CFMachPortRef, true) };
+                        !unsafe { CGEventTapIsEnabled(port as CFMachPortRef) }
+                    })
+                    .unwrap_or(false);
+                    if !needs_remount {
+                        continue;
+                    }
+                    remount_if_needed(&app, generation, &detector, &trigger_tx);
+                    note_listen_state(&app);
                 }
             })
             .ok();
+    }
+
+    fn remount_if_needed(
+        app: &AppHandle,
+        generation: u64,
+        detector: &Arc<Mutex<DoubleTapDetector>>,
+        trigger_tx: &mpsc::SyncSender<()>,
+    ) {
+        let detector = detector.clone();
+        let trigger_tx = trigger_tx.clone();
+        if run_sync_on_main(app, move || {
+            if GENERATION.load(Ordering::SeqCst) != generation || listen_healthy() {
+                return;
+            }
+            log::info!("辅助功能已授权，正在挂载全局快捷键");
+            install(generation, detector, trigger_tx);
+        })
+        .is_err()
+        {
+            log::warn!("重新挂载全局快捷键失败");
+        }
+    }
+
+    fn note_listen_state(app: &AppHandle) {
+        let Some(state) = app.try_state::<crate::shortcut::ShortcutState>() else {
+            return;
+        };
+        if LISTEN_READY.load(Ordering::SeqCst) {
+            state.clear_error();
+        } else {
+            state.set_error("全局快捷键未能挂到主线程，请重启 Quka");
+        }
     }
 
     fn handle_ns_event(
@@ -472,6 +576,27 @@ mod native {
             assert_eq!(classify(0x36), KeyClass::Modifier(ModifierKind::Super));
             assert_eq!(classify(0x3B), KeyClass::Modifier(ModifierKind::Control));
             assert_eq!(classify(0x00), KeyClass::Other);
+        }
+
+        #[test]
+        fn does_not_prompt_for_accessibility_during_startup() {
+            assert!(!super::should_prompt_for_trust(false, false, 1));
+            assert!(!super::should_prompt_for_trust(
+                false,
+                false,
+                super::TRUST_RETRIES_BEFORE_PROMPT - 1
+            ));
+            assert!(!super::should_prompt_for_trust(true, false, 20));
+            assert!(!super::should_prompt_for_trust(
+                false,
+                true,
+                super::TRUST_RETRIES_BEFORE_PROMPT
+            ));
+            assert!(super::should_prompt_for_trust(
+                false,
+                false,
+                super::TRUST_RETRIES_BEFORE_PROMPT
+            ));
         }
     }
 }

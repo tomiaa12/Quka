@@ -53,6 +53,11 @@ impl ShortcutState {
         inner.last_error.clear();
     }
 
+    pub fn set_error(&self, message: impl Into<String>) {
+        let mut inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
+        inner.last_error = message.into();
+    }
+
     pub fn status(&self) -> ShortcutStatus {
         let inner = self.inner.lock().unwrap_or_else(|error| error.into_inner());
         ShortcutStatus {

@@ -35,6 +35,9 @@ fn main() {
         .try_init();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|_app, _args, _cwd| {
+            log::info!("Quka 已在运行，忽略重复打开");
+        }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
