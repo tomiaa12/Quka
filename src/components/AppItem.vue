@@ -16,7 +16,6 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  select: [];
   launch: [];
 }>();
 
@@ -43,8 +42,7 @@ const meta = computed(() => {
     type="button"
     class="app-item"
     :class="{ 'is-selected': selected }"
-    @click="emit('select')"
-    @dblclick="emit('launch')"
+    @click="emit('launch')"
   >
     <div class="app-icon">
       <img v-if="imageSrc" :src="imageSrc" alt="" />

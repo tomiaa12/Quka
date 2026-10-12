@@ -8,7 +8,7 @@ import {
 import { searchApplications } from "../services/search";
 import { checkForUpdate } from "../services/update";
 import { t } from "../i18n";
-import { hideSearchWindow, isTauri } from "../services/window";
+import { hideSearchWindow, isTauri, showSearchWindow } from "../services/window";
 import type { Application } from "../types/application";
 
 const SEARCH_DELAY_MS = 16;
@@ -107,12 +107,13 @@ export const useSearchStore = defineStore("search", {
       const app = this.selected;
       if (!app) return;
 
+      await hideSearchWindow();
+      this.clear();
       try {
         await launchApplication(app.id);
-        this.clear();
-        await hideSearchWindow();
       } catch (error) {
         this.error = error instanceof Error ? error.message : String(error);
+        await showSearchWindow();
       }
     },
     clear() {

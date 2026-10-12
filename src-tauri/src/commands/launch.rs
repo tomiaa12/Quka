@@ -3,7 +3,7 @@ use tauri::State;
 use crate::database::applications::{get_by_id, record_launch};
 use crate::state::{AppError, AppState};
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn launch_application(id: String, state: State<AppState>) -> Result<(), String> {
     let application = {
         let conn = state.lock_db()?;

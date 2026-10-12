@@ -26,8 +26,10 @@ const emit = defineEmits<{
       :keyword="keyword"
       :recent="recent"
       :elapsed-ms="index === selectedIndex ? elapsedMs : 0"
-      @select="emit('select', index)"
-      @launch="emit('launch')"
+      @launch="
+        emit('select', index);
+        emit('launch');
+      "
     />
   </div>
 </template>
