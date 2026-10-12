@@ -41,12 +41,19 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: node scripts/set-version.mjs ${{ github.ref_name }}
       - run: pnpm install --frozen-lockfile
+      - name: Import macOS signing certificate
+        if: startsWith(matrix.platform, 'macos')
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: bash scripts/import-macos-cert.sh
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           TAURI_BUNDLER_DMG_IGNORE_CI: "false"
+          APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos') && 'Quka Self Signed' || '' }}
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
           releaseName: Quka ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}

@@ -98,7 +98,7 @@ mod native {
     }
 
     const ACCESSIBILITY_HINT: &str =
-        "请在系统设置 › 隐私与安全性 › 辅助功能 中允许 Quka，然后无需重启即可双击呼出";
+        "请在系统设置 › 隐私与安全性 › 辅助功能 中允许 Quka；若已勾选仍无效，请用「−」删除 Quka 后重新添加";
 
     fn is_trusted() -> bool {
         unsafe { AXIsProcessTrusted() }
