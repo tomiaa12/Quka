@@ -161,6 +161,7 @@ fn on_shortcut_toggle(app: &AppHandle) {
     let app = app.clone();
     if let Err(error) = app.clone().run_on_main_thread(move || {
         if crate::fullscreen::should_block_shortcut(&app) {
+            log::debug!("前台应用处于全屏独占，已忽略快捷键");
             if let Err(error) = crate::app_window::hide_search_window(&app) {
                 log::debug!("全屏时隐藏搜索窗失败：{error}");
             }
